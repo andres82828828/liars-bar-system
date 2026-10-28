@@ -5,9 +5,11 @@
 module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError }) => {
 
   const MAX_PRICE = 99999999;
+  // Deleting a row that is still referenced: 23503 (NO ACTION) or 23001 (ON DELETE RESTRICT)
+  const IN_USE = ['23503', '23001'];
 
   // Simple "name" catalogs (product types and suppliers) share the same CRUD logic
-  function nameCatalog({ route, table, idCol, label, maxLen, inUseMsg }) {
+  function nameCatalog({ route, table, idCol, label, maxLen }) {
     const readName = (body) => {
       const name = String((body && body.name) ?? '').trim();
       if (!name) throw new HttpError(400, `The ${label} name is required.`);
@@ -53,16 +55,20 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError }) => {
         await log(req.user.id, 'catalog', `Deleted ${label} "${r.rows[0].name}"`);
         res.json({ ok: true });
       } catch (e) {
-        if (e.code === '23503') throw new HttpError(409, inUseMsg);
+        if (IN_USE.includes(e.code)) {
+          // Explain WHY it cannot be deleted and what to do instead
+          const x = (await pool.query(`SELECT x.name, COUNT(p.product_id)::int AS n FROM ${table} x
+            LEFT JOIN product p ON p.${idCol} = x.${idCol} WHERE x.${idCol} = $1 GROUP BY x.name`, [id])).rows[0] || { name: '', n: 0 };
+          throw new HttpError(409, `The ${label} "${x.name}" cannot be deleted because ${x.n} product(s) still use it. ` +
+            `First assign another ${label} to those products (Products → Edit) or delete them, then try again.`);
+        }
         throw e;
       }
     }));
   }
 
-  nameCatalog({ route: 'product-types', table: 'product_type', idCol: 'type_id', label: 'product type', maxLen: 50,
-                inUseMsg: 'It cannot be deleted: some products use this type.' });
-  nameCatalog({ route: 'suppliers', table: 'supplier', idCol: 'supplier_id', label: 'supplier', maxLen: 100,
-                inUseMsg: 'It cannot be deleted: there are products from this supplier.' });
+  nameCatalog({ route: 'product-types', table: 'product_type', idCol: 'type_id', label: 'product type', maxLen: 50 });
+  nameCatalog({ route: 'suppliers', table: 'supplier', idCol: 'supplier_id', label: 'supplier', maxLen: 100 });
 
   // ----------------------------- PRODUCTS -----------------------------
   app.get('/api/products', auth, wrap(async (req, res) => {
@@ -149,7 +155,14 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError }) => {
       await log(req.user.id, 'catalog', `Deleted product ${r.rows[0].code} - ${r.rows[0].name}`);
       res.json({ ok: true });
     } catch (e) {
-      if (e.code === '23503') throw new HttpError(409, 'It cannot be deleted: the product has already been used in orders.');
+      if (IN_USE.includes(e.code)) {
+        // Past orders keep a reference to the product: deleting it would alter old invoices and reports
+        const x = (await pool.query(`SELECT p.name, COUNT(DISTINCT d.order_id)::int AS n FROM product p
+          LEFT JOIN order_detail d ON d.product_id = p.product_id WHERE p.product_id = $1 GROUP BY p.name`, [id])).rows[0] || { name: '', n: 0 };
+        throw new HttpError(409, `"${x.name}" cannot be deleted because it appears in ${x.n} order(s). ` +
+          'Deleting it would change past invoices and sales reports. ' +
+          'If you no longer want to sell it, deactivate it in each branch from Inventory.');
+      }
       throw e;
     }
   }));

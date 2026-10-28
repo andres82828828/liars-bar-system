@@ -137,8 +137,14 @@ const tomorrow = () => { const d = new Date(Date.now() + 86400000); return `${d.
   check('invalid date → 400', r.status === 400, r);
   r = await call(admin, `/reports/sales?from=${tomorrow()}&to=${today()}`);
   check('from > to → 400', r.status === 400, r);
-  r = await call(cashier, '/reports/sales');
-  check('cashier cannot see the sales report (403)', r.status === 403, r);
+  r = await call(cashier, `/reports/sales?from=${today()}&to=${today()}&branch_id=2`);
+  check('cashier sees the report of their own branch only (branch_id ignored)', r.status === 200 && r.data.filters.branch === 'Zona T' && r.data.summary.orders === 2, r.data.filters);
+  r = await call(waiter, '/reports/sales');
+  check('waiter cannot see the sales report (403)', r.status === 403, r);
+  r = await call(admin, `/reports/sales?from=${today()}&to=${today()}`);
+  check('dates filter by order date (taken) by default', r.data.filters.dateBy === 'order' && r.data.sales.every(x => x.takenAt && x.paidAt), r.data.filters);
+  r = await call(admin, `/reports/sales?from=${today()}&to=${today()}&date_by=payment`);
+  check('dates can filter by payment date', r.data.filters.dateBy === 'payment' && r.data.summary.orders === 2, r.data.filters);
 
   console.log('\n8) Excel export');
   const res = await fetch(`${BASE}/reports/sales/export?from=${today()}&to=${today()}`, { headers: { Authorization: 'Bearer ' + admin } });
@@ -158,8 +164,31 @@ const tomorrow = () => { const d = new Date(Date.now() + 86400000); return `${d.
   check('By product sheet rows add up to the summary', revSum === expRevenue && units === rep.summary.units, [revSum, units]);
   const sales = wb.getWorksheet('Sales');
   check('Sales sheet has one row per order + header + total', sales.rowCount === 1 + 2 + 1, sales.rowCount);
-  const res2 = await fetch(`${BASE}/reports/sales/export`, { headers: { Authorization: 'Bearer ' + cashier } });
-  check('cashier cannot export (403)', res2.status === 403, res2.status);
+  check('Sales sheet has the "Taken at" column', sales.getRow(1).values.includes('Taken at'), sales.getRow(1).values);
+  const res2 = await fetch(`${BASE}/reports/sales/export?from=${today()}&to=${today()}`, { headers: { Authorization: 'Bearer ' + cashier } });
+  check('cashier exports the report of their branch', res2.status === 200 && /spreadsheetml/.test(res2.headers.get('content-type')), res2.status);
+  const res3 = await fetch(`${BASE}/reports/sales/export`, { headers: { Authorization: 'Bearer ' + waiter } });
+  check('waiter cannot export (403)', res3.status === 403, res3.status);
+
+  console.log('\n8b) Remove products from an open order (all roles)');
+  const stock = async () => ((await call(waiter, '/catalog')).data.find(x => x.id === 2) || {}).quantity;
+  const before = await stock();
+  r = await call(waiter, `/orders/${openModelia}/items`, 'POST', { productId: 2, quantity: 3 });
+  check('waiter adds 3 beers to the Modelia order', r.status === 201 && await stock() === before - 3, r.data);
+  r = await call(waiter, `/orders/${openModelia}/items/2`, 'DELETE', { quantity: 1 });
+  check('waiter removes 1 unit → 2 left', r.status === 200 && r.data.items.find(i => i.productId === 2).quantity === 2, r.data);
+  check('removed unit goes back to the inventory', await stock() === before - 2);
+  r = await call(cashier, `/orders/${openModelia}/items/2`, 'DELETE');
+  check('cashier of another branch cannot remove (403)', r.status === 403, r);
+  r = await call(waiter, `/orders/${openModelia}/items/2`, 'DELETE', { quantity: 5 });
+  check('cannot remove more units than the order has (400)', r.status === 400, r);
+  r = await call(admin, `/orders/${openModelia}/items/2`, 'DELETE');
+  check('admin removes the whole line → order empty', r.status === 200 && r.data.items.length === 0 && r.data.total === 0, r.data);
+  check('all units back in the inventory', await stock() === before);
+  r = await call(waiter, `/orders/${openModelia}/cancel`, 'POST');
+  check('emptied order can now be cancelled', r.status === 200, r);
+  r = await call(admin, `/orders/${adminOrder}/items/1`, 'DELETE');
+  check('products cannot be removed from a closed order (409)', r.status === 409, r);
 
   console.log('\n9) Audit trail');
   r = await call(admin, '/audit-log/categories');
@@ -201,6 +230,14 @@ const tomorrow = () => { const d = new Date(Date.now() + 86400000); return `${d.
   check('waiter still does waiter work in own branch', r.status === 201, r);
   r = await call(waiter, '/orders', 'POST', { tableId: 1 });    // Zona T
   check('waiter cannot use another branch table (403)', r.status === 403, r);
+
+  console.log('\n11) Deleting catalog items that are in use');
+  r = await call(admin, '/products/2', 'DELETE');    // Club Colombia: used in orders
+  check(`product used in orders → 409 "${r.data.error}"`, r.status === 409 && /appears in \d+ order/.test(r.data.error), r);
+  r = await call(admin, '/product-types/1', 'DELETE');
+  check(`product type with products → 409 "${r.data.error}"`, r.status === 409 && /\d+ product\(s\) still use it/.test(r.data.error), r);
+  r = await call(admin, '/suppliers/1', 'DELETE');
+  check('supplier with products → 409', r.status === 409, r);
 
   console.log(`\nResult: ${pass} OK, ${fail} failed`);
   process.exit(fail ? 1 : 0);

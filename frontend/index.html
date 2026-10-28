@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Management System - Liar's Bar</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%A6%8A%3C/text%3E%3C/svg%3E">
+    <link rel="icon" type="image/png" href="img/favicon.png">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -18,7 +19,7 @@
         <div id="view-login" class="view active">
             <div class="login-container">
                 <div class="logo-circle">
-                    <span class="logo-emoji">🦊</span>
+                    <img class="logo-img" src="img/logo.png" alt="Liar's Bar">
                     <div class="logo-text-circle">LIAR'S BAR • 2026</div>
                 </div>
 
@@ -84,7 +85,7 @@
         <!-- ACCOUNT LOCKED -->
         <div id="view-locked" class="view">
             <div class="login-container">
-                <div class="top-icon-badge lock-badge">🔒</div>
+                <div class="top-icon-badge lock-badge"><i class="fa-solid fa-lock"></i></div>
                 <div class="logo-section">
                     <h1 class="system-title">Account locked</h1>
                     <p class="system-subtitle">Too many failed attempts</p>
@@ -109,7 +110,7 @@
         <!-- ACTIVE SESSION -->
         <div id="view-active-session" class="view">
             <div class="login-container">
-                <div class="top-icon-badge device-badge">📱</div>
+                <div class="top-icon-badge device-badge"><i class="fa-solid fa-mobile-screen-button"></i></div>
                 <div class="logo-section">
                     <h1 class="system-title">Active session detected</h1>
                     <p class="system-subtitle">Active session on another device</p>
@@ -138,7 +139,7 @@
 
         <aside class="sidebar" id="sidebar">
             <div class="brand">
-                <div class="brand-logo">🦊</div>
+                <div class="brand-logo"><img src="img/logo.png" alt=""></div>
                 <div><b>Liar's Bar</b><small>Management System</small></div>
             </div>
 
@@ -149,13 +150,13 @@
                     <div class="avatar" id="userAvatar">?</div>
                     <div class="user-info"><strong id="userName"></strong><small id="userRole"></small></div>
                 </div>
-                <button class="btn-logout" id="btnOpenLogoutModal">⏻&nbsp; Sign out</button>
+                <button class="btn-logout" id="btnOpenLogoutModal"><i class="fa-solid fa-power-off"></i>&nbsp; Sign out</button>
             </div>
         </aside>
 
         <div class="main">
             <header class="topbar">
-                <button class="menu-btn" id="menuBtn" aria-label="Menu">☰</button>
+                <button class="menu-btn" id="menuBtn" aria-label="Menu"><i class="fa-solid fa-bars"></i></button>
                 <div class="page-head">
                     <h1 id="pageTitle"></h1>
                     <p id="pageSub"></p>
@@ -169,7 +170,7 @@
     <!-- MODAL: confirm sign out -->
     <div class="modal-overlay" id="modalLogout" hidden>
         <div class="modal">
-            <div class="modal-icon">⏻</div>
+            <div class="modal-icon"><i class="fa-solid fa-power-off"></i></div>
             <h2>Sign out?</h2>
             <p>You are about to close your session as<br><strong id="logoutUserName"></strong></p>
             <p class="modal-small">The session will be invalidated and you will need to sign in again.</p>
@@ -190,6 +191,18 @@
             <div class="modal-actions">
                 <button class="btn btn-ghost" id="timeoutForceLogout">Sign out</button>
                 <button class="btn" id="timeoutKeepAlive">Stay signed in</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: explains why an action is not allowed (e.g. deleting something in use) -->
+    <div class="modal-overlay" id="modalNotice" hidden>
+        <div class="modal">
+            <div class="modal-icon warn"><i class="fa-solid fa-triangle-exclamation"></i></div>
+            <h2 id="noticeTitle"></h2>
+            <p id="noticeText"></p>
+            <div class="modal-actions">
+                <button class="btn" id="noticeOk">Understood</button>
             </div>
         </div>
     </div>

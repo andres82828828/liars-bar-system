@@ -19,18 +19,18 @@ async function pCashDesk() {
     const toCharge = list.filter(x => x.units > 0).length;
 
     const stats = `<div class="stats">
-        <div class="card stat"><div class="stat-ico y">📋</div><div><div class="stat-num">${list.length}</div><div class="stat-lbl">Open orders</div></div></div>
-        <div class="card stat"><div class="stat-ico r">⏳</div><div><div class="stat-num">${toCharge}</div><div class="stat-lbl">Pending payment</div></div></div>
-        <div class="card stat"><div class="stat-ico g">💵</div><div><div class="stat-num" style="font-size:1.45rem">${money(pending)}</div><div class="stat-lbl">Total to collect</div></div></div>
+        <div class="card stat"><div class="stat-ico y"><i class="fa-solid fa-clipboard-list"></i></div><div><div class="stat-num">${list.length}</div><div class="stat-lbl">Open orders</div></div></div>
+        <div class="card stat"><div class="stat-ico r"><i class="fa-solid fa-hourglass-half"></i></div><div><div class="stat-num">${toCharge}</div><div class="stat-lbl">Pending payment</div></div></div>
+        <div class="card stat"><div class="stat-ico g"><i class="fa-solid fa-money-bill-wave"></i></div><div><div class="stat-num" style="font-size:1.45rem">${money(pending)}</div><div class="stat-lbl">Total to collect</div></div></div>
     </div>`;
 
     const scope = isAdmin() ? `<div class="filters">
-        <button class="fchip ${!all ? 'active' : ''}" onclick="setCashScope(false)">📍 ${esc(branchName())}</button>
-        <button class="fchip ${all ? 'active' : ''}" onclick="setCashScope(true)">🏢 All branches</button></div>` : '';
+        <button class="fchip ${!all ? 'active' : ''}" onclick="setCashScope(false)"><i class="fa-solid fa-location-dot"></i> ${esc(branchName())}</button>
+        <button class="fchip ${all ? 'active' : ''}" onclick="setCashScope(true)"><i class="fa-solid fa-building"></i> All branches</button></div>` : '';
 
     // Table (and branch), total and order selection
     const rows = list.map(x => `<tr class="cash-row" data-q="${esc(('table #' + x.table + ' ' + x.code + ' ' + x.branch).toLowerCase())}">
-        <td><b>Table #${x.table}</b>${all ? `<br><small>📍 ${esc(x.branch)}</small>` : ''}</td>
+        <td><b>Table #${x.table}</b>${all ? `<br><small><i class="fa-solid fa-location-dot"></i> ${esc(x.branch)}</small>` : ''}</td>
         <td>${esc(x.code)}<br><small>Opened at ${fmtTime(x.createdAt)}</small></td>
         <td class="num">${x.units}</td>
         <td class="num"><b>${money(x.total)}</b></td>
@@ -45,7 +45,7 @@ async function pCashDesk() {
         ${scope ? `<div style="margin:-4px 0 14px">${scope}</div>` : ''}
         ${list.length
             ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Table</th><th>Order</th><th class="num">Units</th><th class="num">Total</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
-            : `<div class="empty"><span class="big">✅</span>There are no open orders${all ? '' : ' in this branch'}.</div>`}
+            : `<div class="empty"><span class="big"><i class="fa-solid fa-circle-check"></i></span>There are no open orders${all ? '' : ' in this branch'}.</div>`}
     </section>`;
 }
 
@@ -60,7 +60,7 @@ async function pCheckout() {
     if (!r.ok) return errCard(r.data.error);
     const o = r.data;
     if (o.status !== 'open') {
-        return `<div class="card empty"><span class="big">✅</span>This order is already <b>${esc(o.status)}</b>.<br>
+        return `<div class="card empty"><span class="big"><i class="fa-solid fa-circle-check"></i></span>This order is already <b>${esc(o.status)}</b>.<br>
             <button class="btn btn-sm" style="margin-top:12px" onclick="go('order',{id:${o.id}})">View detail</button></div>`;
     }
     if (!o.items.length) return errCard('The order has no products: there is nothing to charge.');
@@ -103,7 +103,7 @@ async function pCheckout() {
         <div class="pay-msg" id="payMsg"></div>
         <p class="hint" style="margin:-6px 0 14px">When the payment is registered the order is <b>closed</b>, the table is <b>released</b> and the <b>invoice</b> is generated.</p>
         <div class="btn-row">
-            <button class="btn btn-ghost" onclick="go('cash')">← Back to cash desk</button>
+            <button class="btn btn-ghost" onclick="go('cash')"><i class="fa-solid fa-arrow-left"></i> Back to cash desk</button>
             <button class="btn btn-ok" id="btnPay" onclick="registerPayment()" disabled>Register payment</button>
         </div>
     </section>`;
@@ -239,8 +239,8 @@ async function pInvoices() {
     const total = list.reduce((a, x) => a + x.total, 0);
 
     const scope = isAdmin() ? `<div class="filters">
-        <button class="fchip ${!all ? 'active' : ''}" onclick="S.cashAll=false;go('invoices')">📍 ${esc(branchName())}</button>
-        <button class="fchip ${all ? 'active' : ''}" onclick="S.cashAll=true;go('invoices')">🏢 All branches</button></div>` : '';
+        <button class="fchip ${!all ? 'active' : ''}" onclick="S.cashAll=false;go('invoices')"><i class="fa-solid fa-location-dot"></i> ${esc(branchName())}</button>
+        <button class="fchip ${all ? 'active' : ''}" onclick="S.cashAll=true;go('invoices')"><i class="fa-solid fa-building"></i> All branches</button></div>` : '';
 
     const rows = list.map(x => `<tr class="inv-row" data-q="${esc((x.number + ' ' + x.orderCode + ' table #' + x.table + ' ' + x.branch).toLowerCase())}">
         <td><b>${esc(x.number)}</b></td><td>${fmtDate(x.issuedAt)}</td>
@@ -263,7 +263,7 @@ async function pInvoices() {
         <p class="hint" style="margin:-6px 0 12px">${list.length} invoice(s) · ${money(total)} invoiced between ${f.from} and ${f.to}.</p>
         ${list.length
             ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Invoice</th><th>Issued</th><th>Order</th><th>Method</th><th class="num">Total</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
-            : `<div class="empty"><span class="big">🧾</span>No invoices in this period.</div>`}
+            : `<div class="empty"><span class="big"><i class="fa-solid fa-receipt"></i></span>No invoices in this period.</div>`}
     </section>`;
 }
 
@@ -289,13 +289,13 @@ async function pInvoice() {
         <td class="num">${money(i.price)}</td><td class="num">${money(i.subtotal)}</td></tr>`).join('');
 
     const html = `<div class="btn-row no-print" style="margin-bottom:16px">
-            <button class="btn btn-ghost" onclick="go('invoices')">← Invoices</button>
+            <button class="btn btn-ghost" onclick="go('invoices')"><i class="fa-solid fa-arrow-left"></i> Invoices</button>
             <button class="btn btn-ghost" onclick="go('order',{id:${inv.order.id}})">View order</button>
-            <button class="btn" onclick="window.print()">🖨️ Print</button>
+            <button class="btn" onclick="window.print()"><i class="fa-solid fa-print"></i> Print</button>
         </div>
         <article class="invoice-paper" id="invoicePaper">
             <header class="inv-head">
-                <div><div class="inv-brand">🦊 ${esc(inv.business.name)}</div>
+                <div><div class="inv-brand"><img src="img/logo.png" alt=""> ${esc(inv.business.name)}</div>
                     <small>${esc(inv.business.taxId)} · ${esc(inv.business.phone)}</small><br>
                     <small>Branch <b>${esc(inv.branch.name)}</b> · ${esc(inv.branch.address)}</small></div>
                 <div class="inv-number"><small>INVOICE</small><b>${esc(inv.number)}</b><small>${fmtDate(inv.issuedAt)}</small></div>

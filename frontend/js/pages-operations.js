@@ -10,12 +10,12 @@
 async function pHome() {
     const first = esc(S.user.name.split(' ')[0]);
     const buttons = [`<button class="btn" onclick="go('tables')">＋ New order</button>`];
-    if (canCharge()) buttons.push(`<button class="btn btn-ok" onclick="go('cash')">💵 Cash desk</button>`);
-    if (isAdmin()) buttons.push(`<button class="btn btn-ghost" onclick="go('report')">📈 Sales report</button>`);
+    if (canCharge()) buttons.push(`<button class="btn btn-ok" onclick="go('cash')"><i class="fa-solid fa-money-bill-wave"></i> Cash desk</button>`);
+    if (canCharge()) buttons.push(`<button class="btn btn-ghost" onclick="go('report')"><i class="fa-solid fa-chart-line"></i> Sales report</button>`);
     else buttons.push(`<button class="btn btn-ghost" onclick="go('orders')">View orders</button>`);
 
     const head = `<section class="card welcome">
-        <div><h2>Hello, ${first} 👋</h2><p>${esc(S.user.role)} · ${esc(branchName())}</p></div>
+        <div><h2>Hello, ${first} <i class="fa-solid fa-hand"></i></h2><p>${esc(S.user.role)} · ${esc(branchName())}</p></div>
         <div class="btn-row">${buttons.join('')}</div></section>`;
     if (!S.branchId) return head + noBranch();
 
@@ -25,10 +25,10 @@ async function pHome() {
     const low = inv.filter(x => x.active && x.quantity <= LOW_STOCK).sort((a, b) => a.quantity - b.quantity);
 
     const stats = `<div class="stats">
-        <div class="card stat"><div class="stat-ico g">🪑</div><div><div class="stat-num">${free} <small>/ ${tables.length}</small></div><div class="stat-lbl">Free tables</div></div></div>
-        <div class="card stat"><div class="stat-ico r">🍽️</div><div><div class="stat-num">${tables.length - free}</div><div class="stat-lbl">Occupied tables</div></div></div>
-        <div class="card stat"><div class="stat-ico y">📋</div><div><div class="stat-num">${open.length}</div><div class="stat-lbl">Open orders</div></div></div>
-        <div class="card stat"><div class="stat-ico b">📦</div><div><div class="stat-num">${low.length}</div><div class="stat-lbl">Products with low stock</div></div></div>
+        <div class="card stat"><div class="stat-ico g"><i class="fa-solid fa-chair"></i></div><div><div class="stat-num">${free} <small>/ ${tables.length}</small></div><div class="stat-lbl">Free tables</div></div></div>
+        <div class="card stat"><div class="stat-ico r"><i class="fa-solid fa-utensils"></i></div><div><div class="stat-num">${tables.length - free}</div><div class="stat-lbl">Occupied tables</div></div></div>
+        <div class="card stat"><div class="stat-ico y"><i class="fa-solid fa-clipboard-list"></i></div><div><div class="stat-num">${open.length}</div><div class="stat-lbl">Open orders</div></div></div>
+        <div class="card stat"><div class="stat-ico b"><i class="fa-solid fa-boxes-stacked"></i></div><div><div class="stat-num">${low.length}</div><div class="stat-lbl">Products with low stock</div></div></div>
     </div>`;
 
     const orderRows = open.length ? open.slice(0, 8).map(x => `<tr>
@@ -41,9 +41,9 @@ async function pHome() {
         : `<tr><td colspan="2" class="empty">All the inventory is at normal levels.</td></tr>`;
 
     return head + stats + `<div class="split even">
-        <section class="card"><div class="card-head"><h3>Open orders</h3><button class="link-btn" onclick="go('orders')">View all →</button></div>
+        <section class="card"><div class="card-head"><h3>Open orders</h3><button class="link-btn" onclick="go('orders')">View all <i class="fa-solid fa-arrow-right"></i></button></div>
             <div class="table-wrap"><table class="tbl"><tbody>${orderRows}</tbody></table></div></section>
-        <section class="card"><div class="card-head"><h3>Low stock</h3><button class="link-btn" onclick="go('inventory')">Go to inventory →</button></div>
+        <section class="card"><div class="card-head"><h3>Low stock</h3><button class="link-btn" onclick="go('inventory')">Go to inventory <i class="fa-solid fa-arrow-right"></i></button></div>
             <div class="table-wrap"><table class="tbl"><tbody>${stockRows}</tbody></table></div></section>
     </div>`;
 }
@@ -59,7 +59,7 @@ async function pTables() {
     if (!tables.some(t => t.id === S.selTable && t.status === 'free')) S.selTable = null;
 
     if (!tables.length) {
-        return `<div class="card empty"><span class="big">🪑</span>This branch has no tables yet.${isAdmin() ? '<br>Create them in <b>Branches &amp; tables</b>.' : ''}</div>`;
+        return `<div class="card empty"><span class="big"><i class="fa-solid fa-chair"></i></span>This branch has no tables yet.${isAdmin() ? '<br>Create them in <b>Branches &amp; tables</b>.' : ''}</div>`;
     }
 
     const cards = tables.map(t => {
@@ -121,7 +121,7 @@ async function pOrders() {
         <div class="card-head"><div class="filters">${chips}</div><small>${r.data.length} order(s) · ${esc(branchName())}</small></div>
         ${r.data.length
             ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Code</th><th>Table</th><th>Date and time</th><th>Status</th><th class="num">Total</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
-            : `<div class="empty"><span class="big">📋</span>There are no orders to show.</div>`}
+            : `<div class="empty"><span class="big"><i class="fa-solid fa-clipboard-list"></i></span>There are no orders to show.</div>`}
     </section>`;
 }
 function setStatusFilter(v) { S.statusFilter = v; go('orders'); }
@@ -141,22 +141,24 @@ async function pOrder() {
         S.catalog = c.ok ? sortList(c.data) : [];
     }
 
+    // While the order is open any role can remove products (the units go back to the inventory)
     const rows = o.items.map(i => `<tr>
         <td>${esc(i.name)}<br><small>${esc(i.code)}</small></td><td class="num">${i.quantity}</td>
-        <td class="num">${money(i.price)}</td><td class="num"><b>${money(i.subtotal)}</b></td></tr>`).join('');
+        <td class="num">${money(i.price)}</td><td class="num"><b>${money(i.subtotal)}</b></td>
+        ${open ? `<td class="act"><button class="btn btn-sm btn-danger" title="Remove from the order" onclick="removeItem(${i.productId})"><i class="fa-solid fa-trash"></i></button></td>` : ''}</tr>`).join('');
 
     // After the payment the order is CLOSED: no more products, the table is free and it has an invoice
     let footer = '';
     if (o.status === 'closed') {
-        footer = `<p class="hint">🔒 This order is closed: it was paid, the table was released and it can no longer be modified.</p>`;
+        footer = `<p class="hint"><i class="fa-solid fa-lock"></i> This order is closed: it was paid, the table was released and it can no longer be modified.</p>`;
     } else if (open && o.items.length) {
-        footer = '<p class="hint">🔒 Products added to an open order cannot be removed.</p>';
+        footer = '<p class="hint"><i class="fa-solid fa-circle-info"></i> Removed products go back to the branch inventory.</p>';
     }
 
     const invoiceBtn = o.status === 'closed' && canCharge()
         ? (o.invoice
-            ? `<button class="btn btn-dark" onclick="go('invoice',{id:${o.invoice.id}})">🧾 View invoice ${esc(o.invoice.number)}</button>`
-            : `<button class="btn" onclick="generateInvoice(${o.id})">🧾 Generate invoice</button>`)
+            ? `<button class="btn btn-dark" onclick="go('invoice',{id:${o.invoice.id}})"><i class="fa-solid fa-receipt"></i> View invoice ${esc(o.invoice.number)}</button>`
+            : `<button class="btn" onclick="generateInvoice(${o.id})"><i class="fa-solid fa-receipt"></i> Generate invoice</button>`)
         : '';
 
     const ticket = `<section class="card">
@@ -167,15 +169,15 @@ async function pOrder() {
             <div><span>${o.status === 'cancelled' ? 'Cancelled' : 'Closed'}</span><b>${o.closedAt ? fmtDate(o.closedAt) : '—'}</b></div>
         </div>
         ${o.items.length
-            ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th></tr></thead><tbody>${rows}</tbody></table></div>`
-            : `<div class="empty"><span class="big">🛒</span>There are no products in this order yet.</div>`}
+            ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th>${open ? '<th></th>' : ''}</tr></thead><tbody>${rows}</tbody></table></div>`
+            : `<div class="empty"><span class="big"><i class="fa-solid fa-cart-shopping"></i></span>There are no products in this order yet.</div>`}
         ${footer}
         <div class="ticket-total"><span>Total</span><strong>${money(o.total)}</strong></div>
         ${o.payment ? paymentInfoHTML(o.payment) : ''}
         <div class="btn-row" style="margin-top:18px">
-            <button class="btn btn-ghost" onclick="go('${open ? 'tables' : 'orders'}')">← Back</button>
+            <button class="btn btn-ghost" onclick="go('${open ? 'tables' : 'orders'}')"><i class="fa-solid fa-arrow-left"></i> Back</button>
             ${open && !o.items.length ? `<button class="btn btn-danger" onclick="cancelOrder()">Cancel empty order</button>` : ''}
-            ${open && o.items.length && canCharge() ? `<button class="btn btn-ok" onclick="go('checkout',{id:${o.id}})">💵 Charge order</button>` : ''}
+            ${open && o.items.length && canCharge() ? `<button class="btn btn-ok" onclick="go('checkout',{id:${o.id}})"><i class="fa-solid fa-money-bill-wave"></i> Charge order</button>` : ''}
             ${invoiceBtn}
         </div>
     </section>`;
@@ -188,10 +190,30 @@ async function pOrder() {
             <input class="search" id="catSearch" placeholder="Search product…" oninput="filterRows(this.value,'#catList .cat-row')"></div>
         ${S.catalog.length ? sortToolbar() : ''}
         <div class="cat-list" id="catList">${S.catalog.length ? S.catalog.map(catalogRow).join('')
-            : `<div class="empty"><span class="big">📦</span>There are no products with stock in this branch.<br>Stock must be added to the inventory.</div>`}</div>
+            : `<div class="empty"><span class="big"><i class="fa-solid fa-boxes-stacked"></i></span>There are no products with stock in this branch.<br>Stock must be added to the inventory.</div>`}</div>
     </section>`;
 
     return { html: `<div class="split">${catalog}${ticket}</div>`, ...meta };
+}
+
+// Removes units of a product from the open order. With more than one unit it asks how many.
+async function removeItem(productId) {
+    const r0 = await api(`/orders/${S.params.id}`);
+    const item = r0.ok ? r0.data.items.find(i => i.productId === productId) : null;
+    if (!item) { toast('That product is no longer in the order.', 'warn'); go('order', S.params); return; }
+    let quantity = item.quantity;
+    if (item.quantity > 1) {
+        const v = prompt(`How many units of "${item.name}" do you want to remove? (1 to ${item.quantity})`, String(item.quantity));
+        if (v === null) return;
+        quantity = Number(v);
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > item.quantity) {
+            toast(`Enter a whole number between 1 and ${item.quantity}.`, 'warn'); return;
+        }
+    } else if (!confirm(`Remove "${item.name}" from the order?`)) return;
+    const r = await api(`/orders/${S.params.id}/items/${productId}`, 'DELETE', { quantity });
+    if (!r.ok) { toast(r.data.error || 'The product could not be removed.', 'err'); return; }
+    toast(`Removed ${quantity} × ${item.name}. The units went back to the inventory.`);
+    go('order', S.params);
 }
 
 function catalogRow(x) {
@@ -235,7 +257,7 @@ async function cancelOrder() {
 
 // Payment summary of a closed order
 function paymentInfoHTML(p) {
-    const m = PAYMENT_METHODS[p.method] || { name: p.method, icon: '💰' };
+    const m = PAYMENT_METHODS[p.method] || { name: p.method, icon: '<i class="fa-solid fa-sack-dollar"></i>' };
     const cash = p.method === 'cash';
     return `<div class="ticket-meta payment-info">
         <div><span>Payment method</span><b>${m.icon} ${esc(m.name)}</b></div>

@@ -5,7 +5,7 @@
 -- =====================================================================
 
 -- Clean up so the script can be re-run from scratch
-DROP TABLE IF EXISTS invoice, payment, order_detail, customer_order, product_branch,
+DROP TABLE IF EXISTS invoice_detail, invoice, payment, order_detail, customer_order, product_branch,
                      product, product_type, supplier, audit_log,
                      app_user, bar_table, branch CASCADE;
 
@@ -164,6 +164,20 @@ CREATE TABLE invoice (
         ON UPDATE CASCADE ON DELETE RESTRICT,
     CONSTRAINT fk_invoice_payment FOREIGN KEY (payment_id) REFERENCES payment(payment_id)
         ON UPDATE CASCADE ON DELETE RESTRICT
+);
+
+-- Invoice lines: products, quantities and unit price copied from the order when the invoice is issued
+CREATE TABLE invoice_detail (
+    invoice_id  INT NOT NULL,
+    product_id  INT NOT NULL,
+    quantity    INT NOT NULL,
+    unit_price  DECIMAL(10,2) NOT NULL,   -- price in Colombian pesos (COP)
+    PRIMARY KEY (invoice_id, product_id),
+    CONSTRAINT fk_id_invoice FOREIGN KEY (invoice_id) REFERENCES invoice(invoice_id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_id_product FOREIGN KEY (product_id) REFERENCES product(product_id)
+        ON UPDATE CASCADE ON DELETE RESTRICT,
+    CONSTRAINT ck_id_quantity CHECK (quantity > 0)
 );
 
 -- =====================================================================

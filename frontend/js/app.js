@@ -14,9 +14,9 @@ const ROLE = { ADMIN: 'Administrator', CASHIER: 'Cashier', WAITER: 'Waiter' };
 const CASHIERS = [ROLE.ADMIN, ROLE.CASHIER];              // register payments, invoices (the admin can do cashier work)
 const STOCKERS = [ROLE.ADMIN, ROLE.CASHIER];              // add stock to the inventory
 const PAYMENT_METHODS = {
-    cash:        { name: 'Cash',        icon: '💵' },
-    credit_card: { name: 'Credit card', icon: '💳' },
-    debit_card:  { name: 'Debit card',  icon: '🏧' }
+    cash:        { name: 'Cash',        icon: '<i class="fa-solid fa-money-bill-wave"></i>' },
+    credit_card: { name: 'Credit card', icon: '<i class="fa-solid fa-credit-card"></i>' },
+    debit_card:  { name: 'Debit card',  icon: '<i class="fa-solid fa-money-check"></i>' }
 };
 
 // Only for the "Demo quick access" buttons. Remove this in production.
@@ -55,7 +55,11 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 const esc = (t) => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('en-US');
+// Colombian pesos: dot as thousands separator and no decimals, e.g. $55.000
+const money = (n) => {
+    const v = Math.round(Number(n) || 0);
+    return (v < 0 ? '-$' : '$') + String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+};
 const fmtDate = (d) => new Date(d).toLocaleString('en-US', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 const fmtTime = (d) => new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -68,6 +72,14 @@ const canStock = () => hasRole(STOCKERS);
 const canCharge = () => hasRole(CASHIERS);
 const bq = () => `branch_id=${S.branchId || ''}`;
 const methodName = (m) => (PAYMENT_METHODS[m] || { name: m }).name;
+
+// Modal with a longer explanation that stays until the user closes it
+function notice(title, msg) {
+    $('#noticeTitle').textContent = title;
+    $('#noticeText').textContent = msg;
+    $('#modalNotice').hidden = false;
+    $('#noticeOk').focus();
+}
 
 function toast(msg, type = 'ok') {
     const el = document.createElement('div');
@@ -118,9 +130,9 @@ const optionsHTML = (list, selected, placeholder) =>
     (placeholder ? `<option value="">${placeholder}</option>` : '') +
     list.map(x => `<option value="${x.id}" ${String(x.id) === String(selected) ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
 
-const noBranch = () => `<div class="card empty"><span class="big">🏢</span>No branch selected.<br>
+const noBranch = () => `<div class="card empty"><span class="big"><i class="fa-solid fa-building"></i></span>No branch selected.<br>
     ${isAdmin() ? 'Create one in <b>Branches &amp; tables</b>.' : 'Ask the administrator to assign you a branch.'}</div>`;
-const errCard = (msg) => `<div class="card empty"><span class="big">⚠️</span>${esc(msg || 'The information could not be loaded.')}</div>`;
+const errCard = (msg) => `<div class="card empty"><span class="big"><i class="fa-solid fa-triangle-exclamation"></i></span>${esc(msg || 'The information could not be loaded.')}</div>`;
 const statusBadge = (s) => `<span class="badge ${esc(s)}">${esc(s)}</span>`;
 
 // ---------------------------------------------------------------------
@@ -271,13 +283,14 @@ $('#btnOpenLogoutModal').addEventListener('click', () => {
     $('#logoutUserName').textContent = `${S.user.name} — ${S.user.role}`;
     $('#modalLogout').hidden = false;
 });
+$('#noticeOk').addEventListener('click', () => { $('#modalNotice').hidden = true; });
 $('#cancelLogout').addEventListener('click', () => { $('#modalLogout').hidden = true; });
 $('#confirmLogout').addEventListener('click', async () => {
     await signOut();
     showAuth('view-login');
     toast('Signed out successfully.');
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { $('#modalLogout').hidden = true; } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { $('#modalLogout').hidden = true; $('#modalNotice').hidden = true; } });
 
 function resetIdleTimer() {
     if (!S.user || timeoutVisible) return;
@@ -325,11 +338,12 @@ $('#timeoutKeepAlive').addEventListener('click', () => {
 //  the Administrator sees everything (management + waiter + cashier work).
 // ---------------------------------------------------------------------
 const NAV = [
-    { group: 'Operations', items: [['home', '🏠', 'Home'], ['tables', '🪑', 'Tables & orders'], ['cash', '💵', 'Cash desk', CASHIERS],
-                                   ['invoices', '🧾', 'Invoices', CASHIERS], ['orders', '📋', 'Orders'], ['inventory', '📦', 'Inventory']] },
-    { group: 'Catalog', admin: true, items: [['products', '🍸', 'Products'], ['types', '🏷️', 'Product types'], ['suppliers', '🚚', 'Suppliers']] },
-    { group: 'Administration', admin: true, items: [['report', '📈', 'Sales report'], ['audit', '🕵️', 'Audit trail'],
-                                                    ['users', '👥', 'Users'], ['branches', '🏢', 'Branches & tables']] }
+    { group: 'Operations', items: [['home', '<i class="fa-solid fa-house"></i>', 'Home'], ['tables', '<i class="fa-solid fa-chair"></i>', 'Tables & orders'], ['cash', '<i class="fa-solid fa-money-bill-wave"></i>', 'Cash desk', CASHIERS],
+                                   ['invoices', '<i class="fa-solid fa-receipt"></i>', 'Invoices', CASHIERS], ['report', '<i class="fa-solid fa-chart-line"></i>', 'Sales report', CASHIERS],
+                                   ['orders', '<i class="fa-solid fa-clipboard-list"></i>', 'Orders'], ['inventory', '<i class="fa-solid fa-boxes-stacked"></i>', 'Inventory']] },
+    { group: 'Catalog', admin: true, items: [['products', '<i class="fa-solid fa-martini-glass-citrus"></i>', 'Products'], ['types', '<i class="fa-solid fa-tags"></i>', 'Product types'], ['suppliers', '<i class="fa-solid fa-truck"></i>', 'Suppliers']] },
+    { group: 'Administration', admin: true, items: [['audit', '<i class="fa-solid fa-user-secret"></i>', 'Audit trail'],
+                                                    ['users', '<i class="fa-solid fa-users"></i>', 'Users'], ['branches', '<i class="fa-solid fa-building"></i>', 'Branches & tables']] }
 ];
 
 function buildNav() {
@@ -363,7 +377,7 @@ const PAGES = {
     products:  { title: 'Products', sub: 'Create and manage the catalog', admin: true, render: pProducts, after: updateMargin },
     types:     { title: 'Product types', sub: 'Create and manage categories', admin: true, render: pTypes },
     suppliers: { title: 'Suppliers', sub: 'Register, view and manage suppliers', admin: true, render: pSuppliers },
-    report:    { title: 'Sales report', sub: 'Sales, cost and profit by date and branch', admin: true, render: pReport },
+    report:    { title: 'Sales report', sub: 'Sales, cost and profit by date and branch', roles: CASHIERS, render: pReport },
     audit:     { title: 'Audit trail', sub: 'Who did what and when', admin: true, render: pAudit },
     users:     { title: 'Users', sub: 'Create, view, activate and deactivate', admin: true, render: pUsers },
     branches:  { title: 'Branches & tables', sub: 'Branch management', admin: true, render: pBranches }
@@ -373,10 +387,10 @@ function renderTopbar(P) {
     const box = $('#topbarRight');
     if (!P.branch) { box.innerHTML = ''; return; }
     if (isAdmin()) {
-        box.innerHTML = `<label class="branch-pick">📍 Branch
+        box.innerHTML = `<label class="branch-pick"><i class="fa-solid fa-location-dot"></i> Branch
             <select onchange="changeBranch(this.value)">${optionsHTML(S.branches, S.branchId)}</select></label>`;
     } else {
-        box.innerHTML = `<span class="chip">📍 ${esc(branchName())}</span>`;
+        box.innerHTML = `<span class="chip"><i class="fa-solid fa-location-dot"></i> ${esc(branchName())}</span>`;
     }
 }
 

@@ -40,7 +40,7 @@ async function pInventory() {
         ${inv.length ? `<p class="hint" style="margin:-6px 0 12px">${active} active · ${inactive} inactive · ${unassigned} not assigned.
             Only <b>active</b> products with stock appear in the order catalog.</p>` : ''}
         ${inv.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Code</th><th>Product</th><th>Type</th><th class="num">Units</th><th>Status</th>${isAdmin() ? '<th></th>' : ''}</tr></thead><tbody>${rows}</tbody></table></div>`
-            : `<div class="empty"><span class="big">📦</span>There are no products yet.${isAdmin() ? '<br><button class="btn btn-sm" style="margin-top:10px" onclick="go(\'products\')">Create products</button>' : ''}</div>`}
+            : `<div class="empty"><span class="big"><i class="fa-solid fa-boxes-stacked"></i></span>There are no products yet.${isAdmin() ? '<br><button class="btn btn-sm" style="margin-top:10px" onclick="go(\'products\')">Create products</button>' : ''}</div>`}
     </section>`;
 
     if (!canStock()) return table;
@@ -103,7 +103,7 @@ async function pProducts() {
     S.draftProduct = null;
 
     const notice = !S.types.length
-        ? `<div class="notice">⚠️ First create at least one <b>product type</b>. <button class="link-btn" onclick="go('types')">Go to Product types →</button></div>` : '';
+        ? `<div class="notice"><i class="fa-solid fa-triangle-exclamation"></i> First create at least one <b>product type</b>. <button class="link-btn" onclick="go('types')">Go to Product types <i class="fa-solid fa-arrow-right"></i></button></div>` : '';
 
     const form = `<section class="card">
         <div class="card-head"><h3>${editing ? 'Edit product' : 'Register product'}</h3></div>
@@ -137,7 +137,7 @@ async function pProducts() {
             <input class="search" id="prodSearch" placeholder="Search…" oninput="filterRows(this.value,'.prod-row')"></div>
         ${S.products.length ? sortToolbar() : ''}
         ${S.products.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Code</th><th>Product</th><th>Type</th><th>Supplier</th><th class="num">Purchase</th><th class="num">Sale</th><th></th></tr></thead><tbody id="prodBody">${productRows()}</tbody></table></div>`
-            : `<div class="empty"><span class="big">🍸</span>There are no products yet. Register the first one.</div>`}
+            : `<div class="empty"><span class="big"><i class="fa-solid fa-martini-glass-citrus"></i></span>There are no products yet. Register the first one.</div>`}
     </section>`;
 
     return `<div class="split" style="grid-template-columns:minmax(0,1fr) minmax(0,1.5fr)">${form}${table}</div>`;
@@ -146,7 +146,7 @@ async function pProducts() {
 // Product table rows, sorted with the chosen method
 function productRows() {
     return sortList(S.products).map(p => `<tr class="prod-row" data-q="${esc((p.name + ' ' + p.code + ' ' + p.type + ' ' + p.supplier + ' ' + p.branches).toLowerCase())}">
-        <td>${esc(p.code)}</td><td><b>${esc(p.name)}</b><br><small>${p.branches ? '📍 ' + esc(p.branches) : 'Not active in any branch'}</small></td>
+        <td>${esc(p.code)}</td><td><b>${esc(p.name)}</b><br><small>${p.branches ? '<i class="fa-solid fa-location-dot"></i> ' + esc(p.branches) : 'Not active in any branch'}</small></td>
         <td>${esc(p.type)}</td><td>${esc(p.supplier)}</td>
         <td class="num">${money(p.purchasePrice)}</td><td class="num"><b>${money(p.salePrice)}</b></td>
         <td class="act"><button class="btn btn-sm btn-ghost" onclick="editProduct(${p.id})">Edit</button>
@@ -161,7 +161,7 @@ function updateMargin() {
     const g = v - c;
     if (g < 0) {      // sale price below the purchase price: it cannot be saved
         el.classList.add('bad');
-        el.textContent = `⚠️ The sale price cannot be lower than the purchase price (it is ${money(-g)} below cost).`;
+        el.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> The sale price cannot be lower than the purchase price (it is ${money(-g)} below cost).`;
         return;
     }
     el.textContent = `Margin: ${money(g)}${c > 0 ? ` (${Math.round(g / c * 100)}% over cost)` : ''}`;
@@ -208,7 +208,8 @@ function cancelProductEdit() { S.editProduct = null; go('products'); }
 async function deleteProduct(id) {
     const p = S.products.find(x => x.id === id);
     if (!confirm(`Delete the product "${p ? p.name : ''}"?`)) return;
-    const { ok, data } = await api(`/products/${id}`, 'DELETE');
+    const { ok, status, data } = await api(`/products/${id}`, 'DELETE');
+    if (status === 409) { notice('This product cannot be deleted', data.error); return; }
     if (!ok) { toast(data.error || 'It could not be deleted.', 'err'); return; }
     toast('Product deleted.');
     go('products');
@@ -257,7 +258,8 @@ async function saveNamed(route, editVar, page, label) {
 async function deleteNamed(route, list, id, page, label) {
     const x = list.find(v => v.id === id);
     if (!confirm(`Delete the ${label} "${x ? x.name : ''}"?`)) return;
-    const { ok, data } = await api(`/${route}/${id}`, 'DELETE');
+    const { ok, status, data } = await api(`/${route}/${id}`, 'DELETE');
+    if (status === 409) { notice(`This ${label} cannot be deleted`, data.error); return; }
     if (!ok) { toast(data.error || 'It could not be deleted.', 'err'); return; }
     toast(`${label[0].toUpperCase() + label.slice(1)} deleted.`);
     go(page);
@@ -269,7 +271,7 @@ async function pTypes() {
     S.types = r.data;
     if (S.editType && !S.types.some(t => t.id === S.editType)) S.editType = null;
     return nameCatalogPage({ list: S.types, editingId: S.editType, page: 'types', label: 'product type', maxLen: 50,
-        placeholder: 'e.g. Whisky, Desserts, Non-alcoholic', usageHead: 'Usage', usageText: 'product(s)', icon: '🏷️',
+        placeholder: 'e.g. Whisky, Desserts, Non-alcoholic', usageHead: 'Usage', usageText: 'product(s)', icon: '<i class="fa-solid fa-tags"></i>',
         saveFn: 'saveType', delFn: 'deleteType', editVar: 'editType' });
 }
 const saveType = () => saveNamed('product-types', 'editType', 'types', 'product type');
@@ -281,7 +283,7 @@ async function pSuppliers() {
     S.suppliers = r.data;
     if (S.editSupplier && !S.suppliers.some(s => s.id === S.editSupplier)) S.editSupplier = null;
     return nameCatalogPage({ list: S.suppliers, editingId: S.editSupplier, page: 'suppliers', label: 'supplier', maxLen: 100,
-        placeholder: 'e.g. Distribuidora Andina', usageHead: 'Supplies', usageText: 'product(s)', icon: '🚚',
+        placeholder: 'e.g. Distribuidora Andina', usageHead: 'Supplies', usageText: 'product(s)', icon: '<i class="fa-solid fa-truck"></i>',
         saveFn: 'saveSupplier', delFn: 'deleteSupplier', editVar: 'editSupplier', search: true });
 }
 const saveSupplier = () => saveNamed('suppliers', 'editSupplier', 'suppliers', 'supplier');

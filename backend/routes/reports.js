@@ -1,15 +1,22 @@
 // =====================================================================
-//  Sales report (Administrator) and Excel export
-//  Only CLOSED (paid) orders count as sales. Dates filter by payment date.
+//  Sales report and Excel export
+//  Administrator: any branch or all of them · Cashier: only their own branch.
+//  Only CLOSED (paid) orders count as sales. Dates filter by the date the order was TAKEN
+//  (created_at) or, optionally, by the payment date.
 //  Profit = revenue (unit_price x qty) - cost (unit_cost x qty), using the prices frozen
 //  in each order line, so later price changes do not alter past reports.
 // =====================================================================
 const ExcelJS = require('exceljs');
 const { parseDate } = require('../validators');
 
-module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, ROLES }) => {
+module.exports = ({ app, pool, auth, allow, log, wrap, HttpError, ROLES }) => {
 
   const METHOD_NAMES = { cash: 'Cash', credit_card: 'Credit card', debit_card: 'Debit card' };
+  // Which date the period applies to (whitelisted column, never taken from the request as SQL)
+  const DATE_BY = {
+    order:   { col: 'o.created_at', label: 'Order date (taken)' },
+    payment: { col: 'pa.paid_at',   label: 'Payment date' }
+  };
   const cents = (n) => Math.round(Number(n) * 100);
   const round2 = (n) => Math.round(Number(n) * 100) / 100;
   const marginPct = (profit, revenue) => (revenue > 0 ? Math.round((profit / revenue) * 1000) / 10 : 0);
@@ -17,24 +24,29 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, ROLES }) =
   const isoDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
   // Reads and validates the filters. Default: from the 1st of the current month to today.
-  async function readFilters(q) {
+  async function readFilters(q, user) {
     const today = new Date();
     const from = parseDate(q.from, 'start') || isoDay(new Date(today.getFullYear(), today.getMonth(), 1));
     const to = parseDate(q.to, 'end') || isoDay(today);
     if (from > to) throw new HttpError(400, 'The start date cannot be after the end date.');
 
+    const dateBy = DATE_BY[q.date_by] ? q.date_by : 'order';
+
+    // A Cashier only sees their own branch, whatever the request says
+    const requested = user.role === ROLES.ADMIN ? q.branch_id : String(user.branchId || '');
+    if (user.role !== ROLES.ADMIN && !user.branchId) throw new HttpError(403, 'Your account has no branch assigned.');
     let branch = null;
-    if (q.branch_id && q.branch_id !== 'all') {
-      const id = Number(q.branch_id);
+    if (requested && requested !== 'all') {
+      const id = Number(requested);
       const r = Number.isInteger(id) ? await pool.query('SELECT branch_id AS id, name FROM branch WHERE branch_id = $1', [id]) : { rowCount: 0 };
       if (!r.rowCount) throw new HttpError(400, 'The selected branch does not exist.');
       branch = r.rows[0];
     }
-    return { from, to, branch };
+    return { from, to, branch, dateBy };
   }
 
   // Sales query: every product line of the closed orders in the period
-  const SALES_FROM = `
+  const salesFrom = (dateBy) => `
       FROM customer_order o
       JOIN payment pa      ON pa.order_id = o.order_id
       JOIN bar_table t     ON t.table_id = o.table_id
@@ -43,11 +55,12 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, ROLES }) =
       JOIN product p       ON p.product_id = d.product_id
       JOIN product_type ty ON ty.type_id = p.type_id
      WHERE o.status = 'closed'
-       AND pa.paid_at >= $1::date AND pa.paid_at < $2::date + 1
+       AND ${DATE_BY[dateBy].col} >= $1::date AND ${DATE_BY[dateBy].col} < $2::date + 1
        AND ($3::int IS NULL OR b.branch_id = $3)`;
 
   async function salesReport(f) {
     const params = [f.from, f.to, f.branch ? f.branch.id : null];
+    const SALES_FROM = salesFrom(f.dateBy);
 
     const byProduct = (await pool.query(`
       SELECT b.name AS branch, p.code, p.name AS product, ty.name AS type,
@@ -59,13 +72,14 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, ROLES }) =
       ORDER BY b.name, revenue DESC, p.code`, params)).rows;
 
     const sales = (await pool.query(`
-      SELECT o.unique_code AS "orderCode", b.name AS branch, t.number AS "table", pa.paid_at AS "paidAt", pa.method,
+      SELECT o.unique_code AS "orderCode", b.name AS branch, t.number AS "table", o.created_at AS "takenAt",
+             pa.paid_at AS "paidAt", pa.method,
              SUM(d.quantity)::int AS units,
              SUM(d.quantity * d.unit_price)::float AS revenue,
              SUM(d.quantity * d.unit_cost)::float AS cost
       ${SALES_FROM}
-      GROUP BY o.order_id, o.unique_code, b.name, t.number, pa.paid_at, pa.method
-      ORDER BY pa.paid_at, o.order_id`, params)).rows;
+      GROUP BY o.order_id, o.unique_code, b.name, t.number, o.created_at, pa.paid_at, pa.method
+      ORDER BY ${DATE_BY[f.dateBy].col}, o.order_id`, params)).rows;
 
     // Profit per product line and per sale
     for (const x of byProduct) { x.profit = round2(x.revenue - x.cost); x.margin = marginPct(x.profit, x.revenue); }
@@ -86,7 +100,8 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, ROLES }) =
     };
 
     return {
-      filters: { from: f.from, to: f.to, branch: f.branch ? f.branch.name : 'All branches' },
+      filters: { from: f.from, to: f.to, branch: f.branch ? f.branch.name : 'All branches', branchId: f.branch ? f.branch.id : null,
+                 dateBy: f.dateBy, dateByLabel: DATE_BY[f.dateBy].label },
       summary: finish(total),
       byBranch: [...branches.values()].map(finish).sort((a, b) => b.revenue - a.revenue),
       byProduct,
@@ -94,10 +109,10 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, ROLES }) =
     };
   }
 
-  app.get('/api/reports/sales', auth, adminOnly, wrap(async (req, res) => {
-    const f = await readFilters(req.query);
+  app.get('/api/reports/sales', auth, allow(ROLES.CASHIER), wrap(async (req, res) => {
+    const f = await readFilters(req.query, req.user);
     const report = await salesReport(f);
-    await log(req.user.id, 'reports', `Viewed sales report ${f.from} to ${f.to} (${report.filters.branch})`);
+    await log(req.user.id, 'reports', `Viewed sales report ${f.from} to ${f.to} by ${f.dateBy} date (${report.filters.branch})`);
     res.json(report);
   }));
 
@@ -144,7 +159,8 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, ROLES }) =
     const ws1 = wb.addWorksheet('Summary');
     ws1.columns = [{ width: 26 }, { width: 30 }];
     ws1.addRow(["Liar's Bar — Sales report"]).font = { bold: true, size: 14 };
-    [['Period', `${report.filters.from} to ${report.filters.to}`], ['Branch', report.filters.branch],
+    [['Period', `${report.filters.from} to ${report.filters.to}`], ['Dates by', report.filters.dateByLabel],
+     ['Branch', report.filters.branch], ['Currency', 'Colombian pesos (COP)'],
      ['Generated by', user.name], ['Generated at', new Date().toLocaleString('en-US')], []]
       .forEach((r) => ws1.addRow(r));
     const totals = [['Orders (sales)', s.orders], ['Units sold', s.units], ['Revenue', s.revenue], ['Cost', s.cost],
@@ -178,11 +194,13 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, ROLES }) =
     // Sheet 4: Sales (one row per closed order)
     const ws4 = addSheet(wb, 'Sales', [
       { header: 'Order', key: 'orderCode', width: 24 }, { header: 'Branch', key: 'branch', width: 18 },
-      { header: 'Table', key: 'table', width: 8 }, { header: 'Paid at', key: 'paidAt', width: 20 },
+      { header: 'Table', key: 'table', width: 8 }, { header: 'Taken at', key: 'takenAt', width: 20 },
+      { header: 'Paid at', key: 'paidAt', width: 20 },
       { header: 'Method', key: 'methodName', width: 14 }, { header: 'Units', key: 'units', width: 8 },
       { header: 'Total', key: 'revenue', money: true }, { header: 'Cost', key: 'cost', money: true },
       { header: 'Profit', key: 'profit', money: true }],
-      report.sales.map((x) => ({ ...x, paidAt: new Date(x.paidAt) })));
+      report.sales.map((x) => ({ ...x, takenAt: new Date(x.takenAt), paidAt: new Date(x.paidAt) })));
+    ws4.getColumn('takenAt').numFmt = 'yyyy-mm-dd hh:mm';
     ws4.getColumn('paidAt').numFmt = 'yyyy-mm-dd hh:mm';
     const last4 = ws4.rowCount;
     addTotalRow(ws4, { orderCode: 'TOTAL', units: s.units, revenue: s.revenue, cost: s.cost, profit: s.profit });
@@ -202,8 +220,8 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, ROLES }) =
     return wb;
   }
 
-  app.get('/api/reports/sales/export', auth, adminOnly, wrap(async (req, res) => {
-    const f = await readFilters(req.query);
+  app.get('/api/reports/sales/export', auth, allow(ROLES.CASHIER), wrap(async (req, res) => {
+    const f = await readFilters(req.query, req.user);
     const report = await salesReport(f);
     const wb = await buildWorkbook(report, req.user);
     const buffer = await wb.xlsx.writeBuffer();

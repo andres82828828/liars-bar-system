@@ -1,33 +1,40 @@
 'use strict';
 // =====================================================================
-//  ADMINISTRATION (Administrator only): sales report + Excel export,
-//  audit trail, users, branches and tables
+//  SALES REPORT + Excel export (Administrator: any branch · Cashier: own branch)
+//  ADMINISTRATION (Administrator only): audit trail, users, branches and tables
 // =====================================================================
 
 // =====================================================================
 //  SALES REPORT
 // =====================================================================
 async function pReport() {
-    if (!S.report) S.report = { from: firstOfMonth(), to: isoDay(), branch: 'all' };
+    if (!S.report) S.report = { from: firstOfMonth(), to: isoDay(), branch: 'all', dateBy: 'order' };
     const f = S.report;
-    const r = await api(`/reports/sales?from=${f.from}&to=${f.to}&branch_id=${f.branch}`);
+    const r = await api(`/reports/sales?${reportQuery(f)}`);
+    // The Cashier only sees their own branch (the server enforces it too)
+    const branchField = isAdmin()
+        ? `<select id="repBranch"><option value="all">All branches</option>${optionsHTML(S.branches, f.branch)}</select>`
+        : `<select id="repBranch" disabled><option value="">${esc(branchName())}</option></select>`;
     const filters = `<section class="card">
         <div class="filter-bar">
             <div class="field"><label>From</label><input type="date" id="repFrom" value="${f.from}" max="${isoDay()}"></div>
             <div class="field"><label>To</label><input type="date" id="repTo" value="${f.to}" max="${isoDay()}"></div>
-            <div class="field"><label>Branch</label><select id="repBranch"><option value="all">All branches</option>${optionsHTML(S.branches, f.branch)}</select></div>
+            <div class="field"><label>Filter dates by</label><select id="repDateBy">
+                <option value="order" ${f.dateBy !== 'payment' ? 'selected' : ''}>Order date (taken)</option>
+                <option value="payment" ${f.dateBy === 'payment' ? 'selected' : ''}>Payment date</option></select></div>
+            <div class="field"><label>Branch</label>${branchField}</div>
             <button class="btn" onclick="applyReportFilter()">Generate report</button>
-            <button class="btn btn-ok" id="btnExport" onclick="exportReport()">⬇ Export to Excel</button>
+            <button class="btn btn-ok" id="btnExport" onclick="exportReport()"><i class="fa-solid fa-file-excel"></i> Export to Excel</button>
         </div>
     </section>`;
     if (!r.ok) return filters + errCard(r.data.error);
     const rep = r.data, s = rep.summary;
 
     const stats = `<div class="stats">
-        <div class="card stat"><div class="stat-ico y">🧾</div><div><div class="stat-num">${s.orders}</div><div class="stat-lbl">Sales (closed orders) · ${s.units} units</div></div></div>
-        <div class="card stat"><div class="stat-ico b">💰</div><div><div class="stat-num" style="font-size:1.4rem">${money(s.revenue)}</div><div class="stat-lbl">Revenue</div></div></div>
-        <div class="card stat"><div class="stat-ico r">📉</div><div><div class="stat-num" style="font-size:1.4rem">${money(s.cost)}</div><div class="stat-lbl">Cost</div></div></div>
-        <div class="card stat"><div class="stat-ico g">📈</div><div><div class="stat-num" style="font-size:1.4rem">${money(s.profit)}</div><div class="stat-lbl">Profit · ${s.margin}% margin</div></div></div>
+        <div class="card stat"><div class="stat-ico y"><i class="fa-solid fa-receipt"></i></div><div><div class="stat-num">${s.orders}</div><div class="stat-lbl">Sales (closed orders) · ${s.units} units</div></div></div>
+        <div class="card stat"><div class="stat-ico b"><i class="fa-solid fa-sack-dollar"></i></div><div><div class="stat-num" style="font-size:1.4rem">${money(s.revenue)}</div><div class="stat-lbl">Revenue</div></div></div>
+        <div class="card stat"><div class="stat-ico r"><i class="fa-solid fa-arrow-trend-down"></i></div><div><div class="stat-num" style="font-size:1.4rem">${money(s.cost)}</div><div class="stat-lbl">Cost</div></div></div>
+        <div class="card stat"><div class="stat-ico g"><i class="fa-solid fa-arrow-trend-up"></i></div><div><div class="stat-num" style="font-size:1.4rem">${money(s.profit)}</div><div class="stat-lbl">Profit · ${s.margin}% margin</div></div></div>
     </div>`;
 
     const branchRows = rep.byBranch.map(b => `<tr><td><b>${esc(b.branch)}</b></td><td class="num">${b.orders}</td><td class="num">${b.units}</td>
@@ -38,7 +45,13 @@ async function pReport() {
         <td class="num">${p.units}</td><td class="num">${money(p.revenue)}</td><td class="num">${money(p.cost)}</td>
         <td class="num"><b class="${p.profit < 0 ? 'neg' : ''}">${money(p.profit)}</b></td><td class="num">${p.margin}%</td></tr>`).join('');
 
-    const empty = `<div class="empty"><span class="big">📈</span>No sales between ${esc(rep.filters.from)} and ${esc(rep.filters.to)}.</div>`;
+    const salesRowsHtml = rep.sales.map(x => `<tr class="sale-row" data-q="${esc((x.orderCode + ' ' + x.branch + ' ' + x.methodName).toLowerCase())}">
+        <td><b>${esc(x.orderCode)}</b><br><small>${esc(x.branch)} · Table #${x.table}</small></td>
+        <td>${fmtDate(x.takenAt)}</td><td>${fmtDate(x.paidAt)}</td><td>${esc(x.methodName)}</td>
+        <td class="num">${x.units}</td><td class="num"><b>${money(x.revenue)}</b></td><td class="num">${money(x.cost)}</td>
+        <td class="num">${money(x.profit)}</td></tr>`).join('');
+
+    const empty = `<div class="empty"><span class="big"><i class="fa-solid fa-chart-line"></i></span>No sales between ${esc(rep.filters.from)} and ${esc(rep.filters.to)}.<br><small>Only paid (closed) orders count as sales: open orders appear here once they are charged.</small></div>`;
     const totalRow = (cols) => `<tr class="total-row"><td${cols > 1 ? ` colspan="${cols}"` : ''}>TOTAL</td>`;
 
     return filters + stats + `
@@ -52,14 +65,23 @@ async function pReport() {
             <input class="search" placeholder="Search product…" oninput="filterRows(this.value,'.rep-row')"></div>
         ${rep.byProduct.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Branch</th><th>Product</th><th class="num">Units</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th></tr></thead>
             <tbody>${productRowsHtml}${totalRow(2)}<td class="num">${s.units}</td><td class="num">${money(s.revenue)}</td><td class="num">${money(s.cost)}</td><td class="num">${money(s.profit)}</td><td class="num">${s.margin}%</td></tr></tbody></table></div>` : empty}
+    </section>
+    <section class="card">
+        <div class="card-head"><h3>Sales</h3><small>One row per paid order · dates by ${esc(rep.filters.dateByLabel.toLowerCase())}</small>
+            <input class="search" placeholder="Search order…" oninput="filterRows(this.value,'.sale-row')"></div>
+        ${rep.sales.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Order</th><th>Taken</th><th>Paid</th><th>Method</th><th class="num">Units</th><th class="num">Total</th><th class="num">Cost</th><th class="num">Profit</th></tr></thead>
+            <tbody>${salesRowsHtml}${totalRow(4)}<td class="num">${s.units}</td><td class="num">${money(s.revenue)}</td><td class="num">${money(s.cost)}</td><td class="num">${money(s.profit)}</td></tr></tbody></table></div>` : empty}
     </section>`;
 }
 
+const reportQuery = (f) => `from=${f.from}&to=${f.to}&branch_id=${f.branch}&date_by=${f.dateBy}`;
+
 function readReportFilter() {
-    const from = $('#repFrom').value, to = $('#repTo').value, branch = $('#repBranch').value || 'all';
+    const from = $('#repFrom').value, to = $('#repTo').value, dateBy = $('#repDateBy').value;
+    const branch = isAdmin() ? ($('#repBranch').value || 'all') : String(S.branchId || '');
     if (!from || !to) { toast('Select both dates.', 'warn'); return null; }
     if (from > to) { toast('The start date cannot be after the end date.', 'warn'); return null; }
-    return { from, to, branch };
+    return { from, to, branch, dateBy };
 }
 
 function applyReportFilter() {
@@ -75,8 +97,8 @@ async function exportReport() {
     if (!f) return;
     S.report = f;
     const btn = $('#btnExport'); btn.disabled = true; btn.textContent = 'Generating…';
-    const r = await apiDownload(`/reports/sales/export?from=${f.from}&to=${f.to}&branch_id=${f.branch}`, `sales-report_${f.from}_${f.to}.xlsx`);
-    btn.disabled = false; btn.textContent = '⬇ Export to Excel';
+    const r = await apiDownload(`/reports/sales/export?${reportQuery(f)}`, `sales-report_${f.from}_${f.to}.xlsx`);
+    btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-file-excel"></i> Export to Excel';
     if (!r.ok) { toast(r.error, 'err'); return; }
     toast(`Excel file downloaded: ${r.name}`);
 }
@@ -122,7 +144,7 @@ async function pAudit() {
         <div class="card-head"><h3>Records</h3><small>Showing ${r.data.shown} of ${r.data.total}${r.data.total > r.data.shown ? ` (latest ${r.data.limit}; narrow the filters)` : ''}</small></div>
         ${r.data.rows.length
             ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Date and time</th><th>User</th><th>Category</th><th>Operation</th></tr></thead><tbody>${rows}</tbody></table></div>`
-            : `<div class="empty"><span class="big">🕵️</span>No records match the filters.</div>`}
+            : `<div class="empty"><span class="big"><i class="fa-solid fa-user-secret"></i></span>No records match the filters.</div>`}
     </section>`;
 }
 
@@ -167,7 +189,7 @@ async function pUsers() {
               + (u.id !== S.user.id
                   ? (u.resetAuthorized
                       ? ` <button class="btn btn-sm btn-ghost" title="Cancel the authorization" onclick="authorizePasswordChange(${u.id},false)">Cancel change</button>`
-                      : ` <button class="btn btn-sm btn-ghost" title="Allow the user to change their password" onclick="authorizePasswordChange(${u.id},true)">🔑 Reset password</button>`)
+                      : ` <button class="btn btn-sm btn-ghost" title="Allow the user to change their password" onclick="authorizePasswordChange(${u.id},true)"><i class="fa-solid fa-key"></i> Reset password</button>`)
                   : '');
         return `<tr><td><b>${esc(u.username)}</b><br><small>${esc(u.name)}</small></td><td>${esc(u.role)}<br><small>${esc(u.branch || 'All branches')}</small></td>
             <td>${status}</td><td class="act">${actions}</td></tr>`;

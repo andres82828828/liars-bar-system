@@ -45,11 +45,12 @@ You can also run it by hand with `npm run migrate`. Running it again does nothin
 
 | Feature | Waiter | Cashier | Administrator |
 |---|:-:|:-:|:-:|
-| Tables, create orders, add products | ✔ (own branch) | ✔ (own branch) | ✔ (any branch) |
+| Tables, create orders, add and remove products | ✔ (own branch) | ✔ (own branch) | ✔ (any branch) |
 | Cash desk: charge orders, invoices | | ✔ (own branch) | ✔ (one or all branches) |
 | Add stock to the inventory | | ✔ (own branch) | ✔ |
 | Catalog, activate products per branch, users, branches | | | ✔ |
-| Sales report, Excel export, audit trail | | | ✔ |
+| Sales report, Excel export | | ✔ (own branch) | ✔ (one or all branches) |
+| Audit trail | | | ✔ |
 
 The Administrator keeps all management permissions and can also do the Waiter and Cashier work.
 Every permission is enforced by the server, not only by the menu.
@@ -57,18 +58,19 @@ Every permission is enforced by the server, not only by the menu.
 ## How it works
 
 1. **Tables & orders**: tap a free table → **Create order** (unique code `ORD-YYYYMMDD-XXXXXX`, the table becomes *occupied*).
-   Add products from the catalog (only active products with stock in that branch). Added products cannot be removed.
+   Add products from the catalog (only active products with stock in that branch). While the order is open, any role can remove products (all units or some); they go back to the branch inventory.
 2. **Cash desk**: open orders of the branch with table and total → **Charge**.
    - Payment methods: cash, credit card, debit card.
    - Cash: the amount received must cover the total; the change is computed and broken down into bills and coins
      with a **greedy algorithm** (`changeBreakdown` in `frontend/js/pages-cashier.js`).
    - Card: the exact total is charged.
 3. When the payment is valid, in one transaction: the payment is saved, the order is **closed** (no more changes),
-   the table is **released** and the **invoice** is generated (`INV-000001`…).
+   the table is **released** and the **invoice** is generated (`INV-000001`…) with its lines saved in `invoice_detail`.
 4. **Invoices**: list by date; each invoice shows business and branch data, order, table, cashier,
    products and quantities, total, payment method, amount received and change. It can be printed.
-5. **Sales report** (Administrator): closed orders filtered by date range and branch, with revenue, cost,
-   **profit** and margin by branch and by product. Cost and price are frozen in each order line, so later
+5. **Sales report** (Administrator: any branch · Cashier: own branch): closed orders filtered by date range
+   (by **order date** — when the order was taken — or by payment date) and branch, with revenue, cost,
+   **profit** and margin by branch, by product and per sale. Cost and price are frozen in each order line, so later
    price changes do not alter past reports. **Export to Excel** creates an `.xlsx` with 4 sheets
    (Summary, By branch, By product, Sales); before sending it the server checks that every sheet adds up to the summary.
 6. **Audit trail** (Administrator): every traceable operation is stored with user, date/time, category and description
@@ -76,6 +78,7 @@ Every permission is enforced by the server, not only by the menu.
    Filters by date, user, category and text. Denied access attempts are recorded too.
 
 ## Business rules
+- Amounts are in Colombian pesos (COP), shown as `$55.000`.
 - The sale price cannot be lower than the purchase price.
 - User registration validates name, username (no spaces/accents, unique ignoring case) and password
   (8–64 characters, one uppercase letter, one number, no spaces, not containing the username).

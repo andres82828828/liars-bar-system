@@ -1,5 +1,5 @@
 // =====================================================================
-//  Orders: create (table -> occupied), add products (they cannot be removed), detail, list,
+//  Orders: create (table -> occupied), add / remove products while open, detail, list,
 //  payment (closes the order, releases the table and generates the invoice)
 //  Waiter work: Administrator, Cashier and Waiter (the last two only in their branch)
 //  Cashier work (payments): Administrator and Cashier
@@ -182,15 +182,51 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
     res.status(201).json(result.order);
   }));
 
+  // ---------------------- Remove a product from an OPEN order ----------------------
+  // Administrator, Cashier and Waiter (the last two only in their branch). Removes `quantity` units
+  // (default: the whole line) and returns them to the branch inventory. Closed orders cannot change.
+  app.delete('/api/orders/:id/items/:productId', auth, allow(ROLES.CASHIER, ROLES.WAITER), wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const productId = Number(req.params.productId);
+    const body = req.body || {};
+    if (!Number.isInteger(productId) || productId < 1) throw new HttpError(400, 'Select a product.');
+    if (body.quantity !== undefined && (!Number.isInteger(body.quantity) || body.quantity < 1)) {
+      throw new HttpError(400, 'The quantity to remove must be a whole number greater than 0.');
+    }
+
+    const result = await tx(async (c) => {
+      const order = await lockOpenOrder(c, req.user, id);
+      const line = await c.query(`
+        SELECT d.quantity, p.name FROM order_detail d JOIN product p ON p.product_id = d.product_id
+         WHERE d.order_id = $1 AND d.product_id = $2 FOR UPDATE OF d`, [id, productId]);
+      if (!line.rowCount) throw new HttpError(404, 'That product is not in the order.');
+      const { quantity: inOrder, name } = line.rows[0];
+      const remove = body.quantity === undefined ? inOrder : body.quantity;
+      if (remove > inOrder) throw new HttpError(400, `The order only has ${inOrder} unit(s) of "${name}".`);
+
+      if (remove === inOrder) await c.query('DELETE FROM order_detail WHERE order_id = $1 AND product_id = $2', [id, productId]);
+      else await c.query('UPDATE order_detail SET quantity = quantity - $3 WHERE order_id = $1 AND product_id = $2', [id, productId, remove]);
+
+      // The units go back to the branch inventory
+      await c.query('UPDATE product_branch SET quantity = quantity + $3 WHERE branch_id = $1 AND product_id = $2',
+        [order.branch_id, productId, remove]);
+
+      return { order: await loadOrder(c, id), name, remove };
+    });
+
+    await log(req.user.id, 'orders', `Removed ${result.remove} x "${result.name}" from order ${result.order.code} (returned to inventory)`);
+    res.json(result.order);
+  }));
+
   // ---------------------- Cancel an EMPTY order (releases the table) ----------------------
-  // Business rule: products added to an open order can NOT be removed (no role can).
-  // So only an order without products can be cancelled, e.g. one opened on the wrong table.
+  // Only an order without products can be cancelled, e.g. one opened on the wrong table.
+  // To cancel an order with products, remove them first (they go back to the inventory).
   app.post('/api/orders/:id/cancel', auth, allow(ROLES.CASHIER, ROLES.WAITER), wrap(async (req, res) => {
     const id = Number(req.params.id);
     const code = await tx(async (c) => {
       const order = await lockOpenOrder(c, req.user, id);
       const n = await c.query('SELECT COUNT(*)::int AS n FROM order_detail WHERE order_id = $1', [id]);
-      if (n.rows[0].n > 0) throw new HttpError(409, 'It cannot be cancelled: the order already has products and they cannot be removed.');
+      if (n.rows[0].n > 0) throw new HttpError(409, 'It cannot be cancelled: the order has products. Remove them first (they go back to the inventory).');
       await c.query(`UPDATE customer_order SET status = 'cancelled', closed_at = NOW() WHERE order_id = $1`, [id]);
       await c.query(`UPDATE bar_table SET status = 'free' WHERE table_id = $1`, [order.table_id]);
       return order.unique_code;
@@ -243,6 +279,8 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
       await c.query(`UPDATE customer_order SET status = 'closed', closed_at = NOW() WHERE order_id = $1`, [id]);
       await c.query(`UPDATE bar_table SET status = 'free' WHERE table_id = $1`, [order.table_id]);
       const inv = await c.query('INSERT INTO invoice (order_id, payment_id) VALUES ($1, $2) RETURNING invoice_id', [id, paymentId]);
+      // Invoice lines (invoice_detail): copy of the order lines at the moment of invoicing
+      await c.query('INSERT INTO invoice_detail (invoice_id, product_id, quantity, unit_price) SELECT $1, product_id, quantity, unit_price FROM order_detail WHERE order_id = $2', [inv.rows[0].invoice_id, id]);
 
       return {
         paymentId, invoiceId: inv.rows[0].invoice_id, invoiceNumber: invoiceNumber(inv.rows[0].invoice_id),

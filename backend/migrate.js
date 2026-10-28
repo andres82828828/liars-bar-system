@@ -154,6 +154,22 @@ async function addNewColumns(c) {
                    CONSTRAINT fk_payment_cashier REFERENCES app_user(user_id) ON UPDATE CASCADE ON DELETE SET NULL`);
   }
   await c.query('ALTER TABLE app_user ADD COLUMN IF NOT EXISTS reset_authorized_until TIMESTAMP NULL');
+
+  // Invoice lines (detalle_factura). Invoices issued before this table existed get their lines
+  // from the order they belong to.
+  await c.query(`CREATE TABLE IF NOT EXISTS invoice_detail (
+      invoice_id  INT NOT NULL,
+      product_id  INT NOT NULL,
+      quantity    INT NOT NULL,
+      unit_price  DECIMAL(10,2) NOT NULL,
+      PRIMARY KEY (invoice_id, product_id),
+      CONSTRAINT fk_id_invoice FOREIGN KEY (invoice_id) REFERENCES invoice(invoice_id) ON UPDATE CASCADE ON DELETE CASCADE,
+      CONSTRAINT fk_id_product FOREIGN KEY (product_id) REFERENCES product(product_id) ON UPDATE CASCADE ON DELETE RESTRICT,
+      CONSTRAINT ck_id_quantity CHECK (quantity > 0))`);
+  await c.query(`INSERT INTO invoice_detail (invoice_id, product_id, quantity, unit_price)
+                 SELECT i.invoice_id, d.product_id, d.quantity, d.unit_price
+                   FROM invoice i JOIN order_detail d ON d.order_id = i.order_id
+                  WHERE NOT EXISTS (SELECT 1 FROM invoice_detail x WHERE x.invoice_id = i.invoice_id)`);
 }
 
 // Returns a short description of what was done

@@ -28,7 +28,7 @@ const AUDIT_CATEGORIES = {
   branches:  'Branches and tables (create)',
   catalog:   'Catalog (products, product types, suppliers)',
   inventory: 'Inventory (stock entries, activate / deactivate per branch)',
-  orders:    'Orders (create, add products, cancel)',
+  orders:    'Orders (create, add and remove products, cancel)',
   payments:  'Payments (register payment, close order, release table)',
   invoices:  'Invoices (generate)',
   reports:   'Reports (view and export sales)',
@@ -86,8 +86,11 @@ async function tx(fn) {
 const branchOf = (user, chosen) => (user.role === ROLES.ADMIN ? Number(chosen) || null : user.branchId);
 const canAccessBranch = (user, branchId) => user.role === ROLES.ADMIN || user.branchId === branchId;
 
-// Money in Colombian pesos, e.g. $55,000
-const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('en-US');
+// Money in Colombian pesos: dot as thousands separator, e.g. $55.000
+const money = (n) => {
+  const v = Math.round(Number(n) || 0);
+  return (v < 0 ? '-$' : '$') + String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+};
 
 // ---------------------------------------------------------------------
 //  Middlewares
