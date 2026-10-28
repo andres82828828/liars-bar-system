@@ -12,9 +12,11 @@ async function pCashDesk() {
     const all = isAdmin() && S.cashAll;
     if (!all && !S.branchId) return noBranch();
     // The server filters by branch: the Cashier only receives the orders of their own
-    const r = await api(`/orders?${all ? 'branch_id=all' : bq()}&status=open`);
+    const scopeQ = all ? 'branch_id=all' : bq();
+    const [r, d] = await Promise.all([api(`/orders?${scopeQ}&status=open`), api(`/payments/pending?${scopeQ}`)]);
     if (!r.ok) return errCard(r.data.error);
     const list = r.data;
+    const deferredList = d.ok ? d.data : [];
     const pending = list.reduce((acc, x) => acc + x.total, 0);
     const toCharge = list.filter(x => x.units > 0).length;
 
@@ -46,7 +48,16 @@ async function pCashDesk() {
         ${list.length
             ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Table</th><th>Order</th><th class="num">Units</th><th class="num">Total</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
             : `<div class="empty"><span class="big"><i class="fa-solid fa-circle-check"></i></span>There are no open orders${all ? '' : ' in this branch'}.</div>`}
-    </section>`;
+    </section>` + (deferredList.length ? `
+    <section class="card">
+        <div class="card-head"><h3><i class="fa-solid fa-clock"></i> Deferred payments to collect</h3>
+            <small>${deferredList.length} pending · ${money(deferredList.reduce((a, x) => a + x.total, 0))}</small></div>
+        <div class="table-wrap"><table class="tbl"><thead><tr><th>Order</th><th>Deferred at</th><th>Invoice</th><th class="num">Amount due</th><th></th></tr></thead><tbody>
+        ${deferredList.map(x => `<tr><td><b>Table #${x.table}</b> · ${esc(x.orderCode)}${all ? `<br><small><i class="fa-solid fa-location-dot"></i> ${esc(x.branch)}</small>` : ''}</td>
+            <td>${fmtDate(x.deferredAt)}</td><td>${esc(x.invoiceNumber || '—')}</td><td class="num"><b>${money(x.total)}</b></td>
+            <td class="act"><button class="btn btn-sm btn-ok" onclick="go('checkout',{id:${x.orderId},collect:${x.id}})">Collect</button></td></tr>`).join('')}
+        </tbody></table></div>
+    </section>` : '');
 }
 
 function setCashScope(all) { S.cashAll = all; go('cash'); }
@@ -59,14 +70,17 @@ async function pCheckout() {
     const r = await api(`/orders/${S.params.id}`);
     if (!r.ok) return errCard(r.data.error);
     const o = r.data;
-    if (o.status !== 'open') {
-        return `<div class="card empty"><span class="big"><i class="fa-solid fa-circle-check"></i></span>This order is already <b>${esc(o.status)}</b>.<br>
+    // Two modes: charge an OPEN order, or collect a DEFERRED payment of a closed order (S.params.collect)
+    const collect = !!S.params.collect;
+    const pendingPayment = collect && o.payment && o.payment.status === 'pending' && o.payment.id === S.params.collect;
+    if (collect ? !pendingPayment : o.status !== 'open') {
+        return `<div class="card empty"><span class="big"><i class="fa-solid fa-circle-check"></i></span>${collect ? 'This deferred payment was already collected.' : `This order is already <b>${esc(o.status)}</b>.`}<br>
             <button class="btn btn-sm" style="margin-top:12px" onclick="go('order',{id:${o.id}})">View detail</button></div>`;
     }
     if (!o.items.length) return errCard('The order has no products: there is nothing to charge.');
 
     // The total comes computed by the server from the products of the order
-    S.checkout = { id: o.id, total: o.total, method: 'cash' };
+    S.checkout = { id: o.id, total: o.total, method: 'cash', collect: collect ? S.params.collect : null };
 
     const rows = o.items.map(i => `<tr>
         <td>${esc(i.name)}<br><small>${esc(i.code)}</small></td>
@@ -82,12 +96,13 @@ async function pCheckout() {
         <div class="ticket-total"><span>Total to charge</span><strong>${money(o.total)}</strong></div>
     </section>`;
 
-    const methods = Object.entries(PAYMENT_METHODS).map(([k, m]) => `<label class="method" data-method="${k}">
+    // A deferred payment is collected with cash or card (it cannot be deferred again)
+    const methods = Object.entries(PAYMENT_METHODS).filter(([k]) => !(collect && k === 'deferred')).map(([k, m]) => `<label class="method" data-method="${k}">
         <input type="radio" name="paymentMethod" value="${k}" ${k === 'cash' ? 'checked' : ''} onchange="setMethod('${k}')">
         <span class="mi">${m.icon}</span><span>${m.name}</span></label>`).join('');
 
     const form = `<section class="card">
-        <div class="card-head"><h3>Register payment</h3></div>
+        <div class="card-head"><h3>${collect ? 'Collect deferred payment' : 'Register payment'}</h3></div>
         <div class="field"><label>Payment method *</label><div class="methods">${methods}</div></div>
         <div class="field"><label for="payAmount">Amount received *</label>
             <input type="number" id="payAmount" min="0" step="50" inputmode="decimal" placeholder="0" oninput="updateCheckout()"
@@ -101,14 +116,16 @@ async function pCheckout() {
         </div>
         <div class="breakdown" id="payBreakdown"></div>
         <div class="pay-msg" id="payMsg"></div>
-        <p class="hint" style="margin:-6px 0 14px">When the payment is registered the order is <b>closed</b>, the table is <b>released</b> and the <b>invoice</b> is generated.</p>
+        <p class="hint" style="margin:-6px 0 14px">${collect
+            ? 'The order is already closed and invoiced: this only registers how the pending amount was paid.'
+            : 'When the payment is registered the order is <b>closed</b>, the table is <b>released</b> and the <b>invoice</b> is generated.'}</p>
         <div class="btn-row">
             <button class="btn btn-ghost" onclick="go('cash')"><i class="fa-solid fa-arrow-left"></i> Back to cash desk</button>
-            <button class="btn btn-ok" id="btnPay" onclick="registerPayment()" disabled>Register payment</button>
+            <button class="btn btn-ok" id="btnPay" onclick="registerPayment()" disabled>${collect ? 'Collect payment' : 'Register payment'}</button>
         </div>
     </section>`;
 
-    return { html: `<div class="split even">${summary}${form}</div>`, title: 'Charge · Table #' + o.table, sub: `${o.code} · ${o.branch}` };
+    return { html: `<div class="split even">${summary}${form}</div>`, title: (collect ? 'Collect · Table #' : 'Charge · Table #') + o.table, sub: `${o.code} · ${o.branch}` };
 }
 
 // ---------------------------------------------------------------------
@@ -154,6 +171,9 @@ function cashSuggestions(total) {
 // Validates the amount received for the method (same rules as the server). Works in cents.
 function validatePayment(total, method, amount) {
     if (!PAYMENT_METHODS[method]) return { ok: false, msg: 'Select a payment method.' };
+    if (method === 'deferred') {
+        return { ok: true, type: 'warn', change: 0, msg: `${money(total)} will stay pending: collect it later from the Cash desk.` };
+    }
     if (!Number.isFinite(amount) || amount <= 0) return { ok: false, msg: 'Enter the amount received.' };
     if (amount > MAX_AMOUNT) return { ok: false, type: 'err', msg: `The amount cannot exceed ${money(MAX_AMOUNT)}.` };
     const tC = Math.round(total * 100), aC = Math.round(amount * 100);
@@ -173,13 +193,15 @@ function setMethod(method) {
 function renderMethod() {
     const c = S.checkout, input = $('#payAmount');
     if (!c || !input) return;
-    const cash = c.method === 'cash';
+    const cash = c.method === 'cash', deferred = c.method === 'deferred';
     $$('.method').forEach(l => l.classList.toggle('sel', l.dataset.method === c.method));
     input.disabled = !cash;
-    input.value = cash ? '' : c.total;
+    input.value = cash || deferred ? '' : c.total;
     $('#payHint').textContent = cash
         ? 'Money handed over by the customer. It must be equal to or greater than the total.'
-        : 'With a card the exact order total is charged.';
+        : deferred
+            ? 'No money is received now. The order is closed and the table released; the payment stays pending.'
+            : 'With a card the exact order total is charged.';
     $('#payQuick').innerHTML = cash
         ? cashSuggestions(c.total).map(v => `<button class="fchip" type="button" onclick="$('#payAmount').value=${v};updateCheckout()">${v === c.total ? 'Exact' : money(v)}</button>`).join('')
         : '';
@@ -210,10 +232,15 @@ async function registerPayment() {
     const amount = Number($('#payAmount').value);
     const r = validatePayment(c.total, c.method, amount);
     if (!r.ok) { toast(r.msg, 'warn'); return; }
-    if (!confirm(`Register the payment of ${money(c.total)} by ${methodName(c.method)}?${r.change ? `\nChange to give: ${money(r.change)}` : ''}`)) return;
+    const deferred = c.method === 'deferred';
+    const question = deferred
+        ? `Close the order with a DEFERRED payment of ${money(c.total)}?\nThe table is released and the amount stays pending.`
+        : `${c.collect ? 'Collect' : 'Register'} the payment of ${money(c.total)} by ${methodName(c.method)}?${r.change ? `\nChange to give: ${money(r.change)}` : ''}`;
+    if (!confirm(question)) return;
 
     $('#btnPay').disabled = true;
-    const { ok, status, data } = await api(`/orders/${c.id}/payment`, 'POST', { method: c.method, amountReceived: amount });
+    const body = deferred ? { method: 'deferred' } : { method: c.method, amountReceived: amount };
+    const { ok, status, data } = await api(c.collect ? `/payments/${c.collect}/collect` : `/orders/${c.id}/payment`, 'POST', body);
     if (!ok) {
         toast(data.error || 'The payment could not be registered.', 'err');
         if (status === 409 || status === 404 || status === 403) go('cash');   // already paid / no longer exists
@@ -221,7 +248,14 @@ async function registerPayment() {
         return;
     }
     S.checkout = null;
-    toast(`Payment registered · order closed · table #${data.table} released · invoice ${data.invoiceNumber}${data.change ? ` · change ${money(data.change)}` : ''}`);
+    if (c.collect) {
+        toast(`Deferred payment collected by ${methodName(data.method)}${data.change ? ` · change ${money(data.change)}` : ''}`);
+        go('order', { id: c.id });
+        return;
+    }
+    toast(deferred
+        ? `Deferred payment registered · order closed · table #${data.table} released · invoice ${data.invoiceNumber} (pending collection)`
+        : `Payment registered · order closed · table #${data.table} released · invoice ${data.invoiceNumber}${data.change ? ` · change ${money(data.change)}` : ''}`);
     go('invoice', { id: data.invoiceId });
 }
 
@@ -315,9 +349,12 @@ async function pInvoice() {
             </div>
             <div class="inv-payment">
                 <div><span>Payment method</span><b>${m.icon} ${esc(m.name)}</b></div>
-                <div><span>Amount received</span><b>${money(p.amountReceived ?? p.amountPaid)}</b></div>
-                <div><span>Change</span><b>${cash ? money(p.change) : 'N/A'}</b></div>
-                <div><span>Paid at</span><b>${p.paidAt ? fmtDate(p.paidAt) : '—'}</b></div>
+                ${p.status === 'pending'
+                    ? `<div><span>Status</span><b>PENDING — amount due ${money(p.amountPaid)}</b></div>
+                       <div><span>Deferred at</span><b>${fmtDate(p.paidAt)}</b></div>`
+                    : `<div><span>Amount received</span><b>${money(p.amountReceived ?? p.amountPaid)}</b></div>
+                       <div><span>Change</span><b>${cash ? money(p.change) : 'N/A'}</b></div>
+                       <div><span>Paid at</span><b>${p.paidAt ? fmtDate(p.paidAt) : '—'}</b></div>`}
             </div>
             <footer class="inv-foot">Thank you for your visit! · This document is the sales invoice of order ${esc(inv.order.code)}.</footer>
         </article>`;

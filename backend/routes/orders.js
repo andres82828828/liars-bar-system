@@ -1,16 +1,39 @@
 // =====================================================================
 //  Orders: create (table -> occupied), add / remove products while open, detail, list,
 //  payment (closes the order, releases the table and generates the invoice)
-//  Waiter work: Administrator, Cashier and Waiter (the last two only in their branch)
-//  Cashier work (payments): Administrator and Cashier
+//  Waiter work (create orders, add products): Administrator, Cashier and Waiter (the last two only in their branch)
+//  Remove products and cancel orders (RF-48): Administrator and Cashier only
+//  Cashier work (payments, deferred payments): Administrator and Cashier
 // =====================================================================
 const crypto = require('crypto');
 
 module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, canAccessBranch, money, ROLES }) => {
 
   const STATUSES = ['open', 'closed', 'cancelled'];
+  // Methods that collect the money right away. 'deferred' closes the order now and the
+  // payment stays PENDING until it is collected later with one of these methods.
   const PAYMENT_METHODS = { cash: 'Cash', credit_card: 'Credit card', debit_card: 'Debit card' };
+  const ALL_METHODS = { ...PAYMENT_METHODS, deferred: 'Deferred payment' };
   const MAX_AMOUNT = 99999999;
+
+  // Reads the amount received for an immediate payment and checks it against the total (in cents).
+  //   cash → amount >= total; the change is computed (HU-024) · card → exactly the total
+  function checkAmount(method, amountReceived, totalC) {
+    const received = Number(amountReceived);
+    if (amountReceived === '' || amountReceived == null || typeof amountReceived === 'boolean' || !Number.isFinite(received) || received <= 0) {
+      throw new HttpError(400, 'Enter the amount received (a number greater than 0).');
+    }
+    if (received > MAX_AMOUNT) throw new HttpError(400, `The amount received cannot exceed ${money(MAX_AMOUNT)}.`);
+    const receivedC = toCents(received);
+    if (method === 'cash') {
+      if (receivedC < totalC) {
+        throw new HttpError(400, `Insufficient amount: the total is ${money(totalC / 100)} and ${money((totalC - receivedC) / 100)} is missing.`);
+      }
+    } else if (receivedC !== totalC) {
+      throw new HttpError(400, `With a card the amount must be exactly the order total (${money(totalC / 100)}).`);
+    }
+    return { receivedC, changeC: receivedC - totalC };
+  }
 
   // Money is compared in cents (integers) to avoid rounding errors
   const toCents = (n) => Math.round(Number(n) * 100);
@@ -41,7 +64,7 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
        WHERE d.order_id = $1 ORDER BY p.name`, [id]);
 
     const pay = await db.query(`
-      SELECT pa.payment_id AS id, pa.method, pa.amount_paid::float AS "amountPaid", pa.amount_received::float AS "amountReceived",
+      SELECT pa.payment_id AS id, pa.method, pa.status, pa.amount_paid::float AS "amountPaid", pa.amount_received::float AS "amountReceived",
              pa.change_amount::float AS change, pa.paid_at AS "paidAt", u.full_name AS cashier,
              i.invoice_id AS "invoiceId", i.issued_at AS "issuedAt"
         FROM payment pa
@@ -54,7 +77,7 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
     order.units = items.rows.reduce((acc, i) => acc + i.quantity, 0);
     order.total = items.rows.reduce((acc, i) => acc + toCents(i.subtotal), 0) / 100;
     const p = pay.rows[0];
-    order.payment = p ? { id: p.id, method: p.method, amountPaid: p.amountPaid, amountReceived: p.amountReceived,
+    order.payment = p ? { id: p.id, method: p.method, status: p.status, amountPaid: p.amountPaid, amountReceived: p.amountReceived,
                           change: p.change, paidAt: p.paidAt, cashier: p.cashier } : null;
     order.invoice = p && p.invoiceId ? { id: p.invoiceId, number: invoiceNumber(p.invoiceId), issuedAt: p.issuedAt } : null;
     return order;
@@ -117,11 +140,15 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
       try {
         created = await tx(async (c) => {
           // FOR UPDATE: if two waiters pick the same table, only one wins
-          const t = await c.query('SELECT table_id, branch_id, number, status FROM bar_table WHERE table_id = $1 FOR UPDATE', [tableId]);
+          const t = await c.query(`SELECT t.table_id, t.branch_id, t.number, t.status, b.active AS branch_active
+                                     FROM bar_table t JOIN branch b ON b.branch_id = t.branch_id
+                                    WHERE t.table_id = $1 FOR UPDATE OF t`, [tableId]);
           if (!t.rowCount) throw new HttpError(404, 'The table does not exist.');
           const table = t.rows[0];
           if (!canAccessBranch(req.user, table.branch_id)) throw new HttpError(403, 'That table belongs to another branch.');
-          if (table.status !== 'free') throw new HttpError(409, `Table #${table.number} is already occupied.`);
+          if (!table.branch_active) throw new HttpError(409, 'The branch is inactive: it cannot receive orders.');
+          if (table.status === 'inactive') throw new HttpError(409, `Table #${table.number} is inactive.`);
+          if (table.status !== 'available') throw new HttpError(409, `Table #${table.number} is already occupied.`);
 
           const code = newOrderCode();
           const r = await c.query(
@@ -183,9 +210,9 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
   }));
 
   // ---------------------- Remove a product from an OPEN order ----------------------
-  // Administrator, Cashier and Waiter (the last two only in their branch). Removes `quantity` units
+  // RF-48: Administrator and Cashier (the Cashier only in their branch). Removes `quantity` units
   // (default: the whole line) and returns them to the branch inventory. Closed orders cannot change.
-  app.delete('/api/orders/:id/items/:productId', auth, allow(ROLES.CASHIER, ROLES.WAITER), wrap(async (req, res) => {
+  app.delete('/api/orders/:id/items/:productId', auth, allow(ROLES.CASHIER), wrap(async (req, res) => {
     const id = Number(req.params.id);
     const productId = Number(req.params.productId);
     const body = req.body || {};
@@ -219,16 +246,17 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
   }));
 
   // ---------------------- Cancel an EMPTY order (releases the table) ----------------------
-  // Only an order without products can be cancelled, e.g. one opened on the wrong table.
+  // RF-48: Administrator and Cashier only. Only an order without products can be cancelled,
+  // e.g. one opened on the wrong table.
   // To cancel an order with products, remove them first (they go back to the inventory).
-  app.post('/api/orders/:id/cancel', auth, allow(ROLES.CASHIER, ROLES.WAITER), wrap(async (req, res) => {
+  app.post('/api/orders/:id/cancel', auth, allow(ROLES.CASHIER), wrap(async (req, res) => {
     const id = Number(req.params.id);
     const code = await tx(async (c) => {
       const order = await lockOpenOrder(c, req.user, id);
       const n = await c.query('SELECT COUNT(*)::int AS n FROM order_detail WHERE order_id = $1', [id]);
       if (n.rows[0].n > 0) throw new HttpError(409, 'It cannot be cancelled: the order has products. Remove them first (they go back to the inventory).');
       await c.query(`UPDATE customer_order SET status = 'cancelled', closed_at = NOW() WHERE order_id = $1`, [id]);
-      await c.query(`UPDATE bar_table SET status = 'free' WHERE table_id = $1`, [order.table_id]);
+      await c.query(`UPDATE bar_table SET status = 'available' WHERE table_id = $1`, [order.table_id]);
       return order.unique_code;
     });
     await log(req.user.id, 'orders', `Cancelled empty order ${code}`);
@@ -240,17 +268,14 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
   // order_detail (the value sent by the browser is not trusted).
   //   cash                    → amount received >= total; the change is computed (HU-024)
   //   credit / debit card     → amount must be exactly the total (no change)
+  //   deferred                → no money now: the payment stays 'pending' until it is collected
   // In ONE transaction (all or nothing), only if the payment is valid:
-  //   1) payment saved  2) order -> 'closed' (no further changes)  3) table -> 'free'  4) invoice generated
+  //   1) payment saved  2) order -> 'closed' (no further changes)  3) table -> 'available'  4) invoice generated
   app.post('/api/orders/:id/payment', auth, allow(ROLES.CASHIER), wrap(async (req, res) => {
     const id = Number(req.params.id);
     const { method, amountReceived } = req.body || {};
-    if (!PAYMENT_METHODS[method]) throw new HttpError(400, 'Select a valid payment method: cash, credit card or debit card.');
-    const received = Number(amountReceived);
-    if (amountReceived === '' || amountReceived == null || typeof amountReceived === 'boolean' || !Number.isFinite(received) || received <= 0) {
-      throw new HttpError(400, 'Enter the amount received (a number greater than 0).');
-    }
-    if (received > MAX_AMOUNT) throw new HttpError(400, `The amount received cannot exceed ${money(MAX_AMOUNT)}.`);
+    if (!ALL_METHODS[method]) throw new HttpError(400, 'Select a valid payment method: cash, credit card, debit card or deferred payment.');
+    const deferred = method === 'deferred';
 
     const result = await tx(async (c) => {
       const order = await lockOpenOrder(c, req.user, id);
@@ -259,25 +284,16 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
       const totalC = toCents(t.rows[0].total);
       if (totalC <= 0) throw new HttpError(409, 'The order has no products: there is nothing to charge.');
 
-      // Change for cash payments (HU-024): compare received with total and compute the difference
-      const receivedC = toCents(received);
-      if (method === 'cash') {
-        if (receivedC < totalC) {
-          throw new HttpError(400, `Insufficient amount: the total is ${money(totalC / 100)} and ${money((totalC - receivedC) / 100)} is missing.`);
-        }
-      } else if (receivedC !== totalC) {
-        throw new HttpError(400, `With a card the amount must be exactly the order total (${money(totalC / 100)}).`);
-      }
-      const changeC = receivedC - totalC;
+      const { receivedC, changeC } = deferred ? { receivedC: null, changeC: 0 } : checkAmount(method, amountReceived, totalC);
 
       const pay = await c.query(`
-        INSERT INTO payment (order_id, cashier_id, amount_paid, amount_received, method, change_amount)
-        VALUES ($1, $2, $3, $4, $5, $6) RETURNING payment_id`,
-        [id, req.user.id, totalC / 100, receivedC / 100, method, changeC / 100]);
+        INSERT INTO payment (order_id, cashier_id, amount_paid, amount_received, method, change_amount, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING payment_id`,
+        [id, req.user.id, totalC / 100, receivedC === null ? null : receivedC / 100, method, changeC / 100, deferred ? 'pending' : 'paid']);
       const paymentId = pay.rows[0].payment_id;
 
       await c.query(`UPDATE customer_order SET status = 'closed', closed_at = NOW() WHERE order_id = $1`, [id]);
-      await c.query(`UPDATE bar_table SET status = 'free' WHERE table_id = $1`, [order.table_id]);
+      await c.query(`UPDATE bar_table SET status = 'available' WHERE table_id = $1`, [order.table_id]);
       const inv = await c.query('INSERT INTO invoice (order_id, payment_id) VALUES ($1, $2) RETURNING invoice_id', [id, paymentId]);
       // Invoice lines (invoice_detail): copy of the order lines at the moment of invoicing
       await c.query('INSERT INTO invoice_detail (invoice_id, product_id, quantity, unit_price) SELECT $1, product_id, quantity, unit_price FROM order_detail WHERE order_id = $2', [inv.rows[0].invoice_id, id]);
@@ -285,15 +301,65 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
       return {
         paymentId, invoiceId: inv.rows[0].invoice_id, invoiceNumber: invoiceNumber(inv.rows[0].invoice_id),
         code: order.unique_code, table: order.table_number,
-        method, total: totalC / 100, received: receivedC / 100, change: changeC / 100
+        method, status: deferred ? 'pending' : 'paid',
+        total: totalC / 100, received: receivedC === null ? null : receivedC / 100, change: changeC / 100
       };
     });
 
-    await log(req.user.id, 'payments', `Registered payment of order ${result.code}: ${money(result.total)} by ${PAYMENT_METHODS[method]}` +
-      (result.change ? ` (received ${money(result.received)}, change ${money(result.change)})` : '') +
-      `. Order closed and table #${result.table} released`);
+    await log(req.user.id, 'payments', deferred
+      ? `Registered DEFERRED payment of order ${result.code}: ${money(result.total)} pending. Order closed and table #${result.table} released`
+      : `Registered payment of order ${result.code}: ${money(result.total)} by ${PAYMENT_METHODS[method]}` +
+        (result.change ? ` (received ${money(result.received)}, change ${money(result.change)})` : '') +
+        `. Order closed and table #${result.table} released`);
     await log(req.user.id, 'invoices', `Generated invoice ${result.invoiceNumber} for order ${result.code}`);
     res.status(201).json(result);
+  }));
+
+  // ---------------------- Deferred payments ----------------------
+  // Pending deferred payments of the branch (the Administrator can ask for all branches)
+  app.get('/api/payments/pending', auth, allow(ROLES.CASHIER), wrap(async (req, res) => {
+    const all = req.user.role === ROLES.ADMIN && req.query.branch_id === 'all';
+    const branchId = all ? null : branchOf(req.user, req.query.branch_id);
+    if (!all && !branchId) return res.json([]);
+    const { rows } = await pool.query(`
+      SELECT pa.payment_id AS id, pa.amount_paid::float AS total, pa.paid_at AS "deferredAt",
+             o.order_id AS "orderId", o.unique_code AS "orderCode", t.number AS "table", b.name AS branch, i.invoice_id AS "invoiceId"
+        FROM payment pa
+        JOIN customer_order o ON o.order_id = pa.order_id
+        JOIN bar_table t ON t.table_id = o.table_id
+        JOIN branch b ON b.branch_id = t.branch_id
+        LEFT JOIN invoice i ON i.payment_id = pa.payment_id
+       WHERE pa.status = 'pending' AND ($1::int IS NULL OR t.branch_id = $1)
+       ORDER BY pa.paid_at`, [branchId]);
+    res.json(rows.map((x) => ({ ...x, invoiceNumber: x.invoiceId ? invoiceNumber(x.invoiceId) : null })));
+  }));
+
+  // Collects a deferred payment with cash or card. The payment becomes 'paid' (paid_at = now).
+  app.post('/api/payments/:id/collect', auth, allow(ROLES.CASHIER), wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const { method, amountReceived } = req.body || {};
+    if (!PAYMENT_METHODS[method]) throw new HttpError(400, 'Select how the deferred payment is collected: cash, credit card or debit card.');
+
+    const result = await tx(async (c) => {
+      const r = await c.query(`
+        SELECT pa.payment_id, pa.amount_paid, pa.status, o.unique_code, t.branch_id
+          FROM payment pa JOIN customer_order o ON o.order_id = pa.order_id JOIN bar_table t ON t.table_id = o.table_id
+         WHERE pa.payment_id = $1 FOR UPDATE OF pa`, [id]);
+      if (!r.rowCount) throw new HttpError(404, 'The payment does not exist.');
+      const p = r.rows[0];
+      if (!canAccessBranch(req.user, p.branch_id)) throw new HttpError(403, 'That payment belongs to another branch.');
+      if (p.status !== 'pending') throw new HttpError(409, 'This payment was already collected.');
+      const totalC = toCents(p.amount_paid);
+      const { receivedC, changeC } = checkAmount(method, amountReceived, totalC);
+      await c.query(`UPDATE payment SET method = $1, amount_received = $2, change_amount = $3, status = 'paid',
+                            paid_at = NOW(), cashier_id = $4 WHERE payment_id = $5`,
+        [method, receivedC / 100, changeC / 100, req.user.id, id]);
+      return { code: p.unique_code, total: totalC / 100, received: receivedC / 100, change: changeC / 100 };
+    });
+
+    await log(req.user.id, 'payments', `Collected deferred payment of order ${result.code}: ${money(result.total)} by ${PAYMENT_METHODS[method]}` +
+      (result.change ? ` (received ${money(result.received)}, change ${money(result.change)})` : ''));
+    res.json({ ok: true, method, ...result });
   }));
 
   // Shared with routes/invoices.js

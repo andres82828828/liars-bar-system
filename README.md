@@ -45,10 +45,13 @@ You can also run it by hand with `npm run migrate`. Running it again does nothin
 
 | Feature | Waiter | Cashier | Administrator |
 |---|:-:|:-:|:-:|
-| Tables, create orders, add and remove products | ✔ (own branch) | ✔ (own branch) | ✔ (any branch) |
-| Cash desk: charge orders, invoices | | ✔ (own branch) | ✔ (one or all branches) |
+| Tables, create orders, add products | ✔ (own branch) | ✔ (own branch) | ✔ (any branch) |
+| Remove products from an open order, cancel orders (RF-48) | | ✔ (own branch) | ✔ (any branch) |
+| Cash desk: charge orders (also deferred payments), invoices | | ✔ (own branch) | ✔ (one or all branches) |
 | Add stock to the inventory | | ✔ (own branch) | ✔ |
-| Catalog, activate products per branch, users, branches | | | ✔ |
+| Catalog, activate products per branch | | | ✔ |
+| Users: create, edit (name, role, branch), activate / deactivate (RF-01) | | | ✔ |
+| Branches and tables: create, edit, activate / deactivate (RF-02, RF-03) | | | ✔ |
 | Sales report, Excel export | | ✔ (own branch) | ✔ (one or all branches) |
 | Audit trail | | | ✔ |
 
@@ -57,20 +60,23 @@ Every permission is enforced by the server, not only by the menu.
 
 ## How it works
 
-1. **Tables & orders**: tap a free table → **Create order** (unique code `ORD-YYYYMMDD-XXXXXX`, the table becomes *occupied*).
-   Add products from the catalog (only active products with stock in that branch). While the order is open, any role can remove products (all units or some); they go back to the branch inventory.
+1. **Tables & orders**: tap an available table → **Create order** (unique code `ORD-YYYYMMDD-XXXXXX`, the table becomes *occupied*).
+   Add products from the catalog (only active products with stock in that branch). While the order is open, the Cashier and the Administrator can remove products (all units or some); they go back
+   to the branch inventory. The Waiter can only add products (RF-48).
 2. **Cash desk**: open orders of the branch with table and total → **Charge**.
-   - Payment methods: cash, credit card, debit card.
+   - Payment methods: cash, credit card, debit card and **deferred payment**.
    - Cash: the amount received must cover the total; the change is computed and broken down into bills and coins
      with a **greedy algorithm** (`changeBreakdown` in `frontend/js/pages-cashier.js`).
    - Card: the exact total is charged.
+   - Deferred: the order is closed, the table released and the invoice issued, but the payment stays **pending**.
+     It appears under "Deferred payments to collect" in the Cash desk until it is collected with cash or card.
 3. When the payment is valid, in one transaction: the payment is saved, the order is **closed** (no more changes),
    the table is **released** and the **invoice** is generated (`INV-000001`…) with its lines saved in `invoice_detail`.
 4. **Invoices**: list by date; each invoice shows business and branch data, order, table, cashier,
    products and quantities, total, payment method, amount received and change. It can be printed.
 5. **Sales report** (Administrator: any branch · Cashier: own branch): closed orders filtered by date range
    (by **order date** — when the order was taken — or by payment date) and branch, with revenue, cost,
-   **profit** and margin by branch, by product and per sale. Cost and price are frozen in each order line, so later
+   **profit** and margin by branch, by product (per day, with the unit purchase and sale value) and per sale. Cost and price are frozen in each order line, so later
    price changes do not alter past reports. **Export to Excel** creates an `.xlsx` with 4 sheets
    (Summary, By branch, By product, Sales); before sending it the server checks that every sheet adds up to the summary.
 6. **Audit trail** (Administrator): every traceable operation is stored with user, date/time, category and description
@@ -84,10 +90,25 @@ Every permission is enforced by the server, not only by the menu.
   (8–64 characters, one uppercase letter, one number, no spaces, not containing the username).
 - A product can be active or inactive per branch; inactive products cannot be ordered even with stock.
   Products at 0 units are *out of stock* but stay active.
-- Only empty orders can be cancelled. Closed orders cannot be modified, cancelled or paid again.
+- Only empty orders can be cancelled, and only by the Cashier or the Administrator (RF-48). Closed orders cannot
+  be modified, cancelled or paid again.
+- Table status: `available`, `occupied` or `inactive`. Users, branches and tables are deactivated, never deleted,
+  so the history stays intact. The staff of an inactive branch cannot sign in, and it cannot receive orders.
+- Inventory is taken out when a product is added to the order (it is reserved for that table) and goes back if
+  the product is removed from the open order (RF-30).
 - If two people pick the same table (or the same stock) at the same time, only one wins (transactions + row locks).
-- Login with bcrypt, lock after 3 failed attempts, single session per account, sign-out after 3 minutes of inactivity.
-- Password change from the login screen only after an administrator authorizes it (30 minutes, single use).
+- Login with bcrypt, lock after 3 failed attempts, single session per account, sign-out after exactly 3 minutes
+  of inactivity (the browser and the server close the session at the same moment, RNF-07).
+- Password change from the login screen with **full name and username** (RF-24), only after an administrator
+  authorizes it (30 minutes, single use).
+
+## Security
+- Login messages are generic ("Wrong username or password."): they do not reveal whether a username exists.
+- Failed logins / password changes are limited per IP address (10 every 15 minutes, `LOGIN_MAX_FAILS_PER_IP`).
+- Security headers with `helmet` (Content-Security-Policy, X-Content-Type-Options, etc.).
+- The audit trail is append-only: database triggers reject any `UPDATE`, `DELETE` or `TRUNCATE` on `audit_log` (RNF-22).
+- Technical errors are written to `backend/logs/error.log` with `winston` (RNF-23); the user only sees a generic
+  message. Passwords, hashes and session tokens are never logged.
 
 ## Sorting algorithms
 `frontend/sorting.js` implements Bubble, Insertion, Selection, Merge and Quick Sort by hand (no `Array.sort`).
@@ -109,5 +130,6 @@ administrator permissions…) and drops the temporary database. Your `liars_bar`
 | `ECONNREFUSED ... 5432` | PostgreSQL is not running (or the port in `.env` is wrong). Open Windows "Services" and start `postgresql-x64-XX`. |
 | `28P01` / wrong password | Check `DB_PASSWORD` in `backend/.env`. |
 | `EADDRINUSE 3000` | Another program uses the port. Set `PORT=3001` in `.env`. |
-| "The account already has an active session" after closing the browser | Wait 4 minutes or restart the server. |
+| "The account already has an active session" after closing the browser | Wait 3 minutes or restart the server. |
+| "Too many failed attempts from this device" | Wait 15 minutes or restart the server. |
 | The page looks unstyled / old | Reload with `Ctrl + F5`. |

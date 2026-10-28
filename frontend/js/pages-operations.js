@@ -21,12 +21,12 @@ async function pHome() {
 
     const [t, o, i] = await Promise.all([api(`/tables?${bq()}`), api(`/orders?${bq()}&status=open`), api(`/inventory?${bq()}`)]);
     const tables = t.ok ? t.data : [], open = o.ok ? o.data : [], inv = i.ok ? i.data : [];
-    const free = tables.filter(x => x.status === 'free').length;
+    const free = tables.filter(x => x.status === 'available').length;
     const low = inv.filter(x => x.active && x.quantity <= LOW_STOCK).sort((a, b) => a.quantity - b.quantity);
 
     const stats = `<div class="stats">
-        <div class="card stat"><div class="stat-ico g"><i class="fa-solid fa-chair"></i></div><div><div class="stat-num">${free} <small>/ ${tables.length}</small></div><div class="stat-lbl">Free tables</div></div></div>
-        <div class="card stat"><div class="stat-ico r"><i class="fa-solid fa-utensils"></i></div><div><div class="stat-num">${tables.length - free}</div><div class="stat-lbl">Occupied tables</div></div></div>
+        <div class="card stat"><div class="stat-ico g"><i class="fa-solid fa-chair"></i></div><div><div class="stat-num">${free} <small>/ ${tables.length}</small></div><div class="stat-lbl">Available tables</div></div></div>
+        <div class="card stat"><div class="stat-ico r"><i class="fa-solid fa-utensils"></i></div><div><div class="stat-num">${tables.filter(x => x.status === 'occupied').length}</div><div class="stat-lbl">Occupied tables</div></div></div>
         <div class="card stat"><div class="stat-ico y"><i class="fa-solid fa-clipboard-list"></i></div><div><div class="stat-num">${open.length}</div><div class="stat-lbl">Open orders</div></div></div>
         <div class="card stat"><div class="stat-ico b"><i class="fa-solid fa-boxes-stacked"></i></div><div><div class="stat-num">${low.length}</div><div class="stat-lbl">Products with low stock</div></div></div>
     </div>`;
@@ -56,42 +56,45 @@ async function pTables() {
     const r = await api(`/tables?${bq()}`);
     if (!r.ok) return errCard(r.data.error);
     const tables = r.data;
-    if (!tables.some(t => t.id === S.selTable && t.status === 'free')) S.selTable = null;
+    if (!tables.some(t => t.id === S.selTable && t.status === 'available')) S.selTable = null;
 
     if (!tables.length) {
         return `<div class="card empty"><span class="big"><i class="fa-solid fa-chair"></i></span>This branch has no tables yet.${isAdmin() ? '<br>Create them in <b>Branches &amp; tables</b>.' : ''}</div>`;
     }
 
     const cards = tables.map(t => {
-        if (t.status === 'free') {
-            return `<button class="table-card free ${S.selTable === t.id ? 'sel' : ''}" data-id="${t.id}" onclick="selectTable(${t.id},${t.number})">
-                <span class="table-n">${t.number}</span><span class="table-s">Free</span></button>`;
+        if (t.status === 'available') {
+            return `<button class="table-card available ${S.selTable === t.id ? 'sel' : ''}" data-id="${t.id}" onclick="selectTable(${t.id},${t.number})">
+                <span class="table-n">${t.number}</span><span class="table-s">Available</span></button>`;
+        }
+        if (t.status === 'inactive') {
+            return `<div class="table-card inactive"><span class="table-n">${t.number}</span><span class="table-s">Inactive</span></div>`;
         }
         return `<div class="table-card occupied"><span class="table-n">${t.number}</span><span class="table-s">Occupied</span>
             ${t.orderId ? `<button class="btn btn-sm btn-dark" onclick="go('order',{id:${t.orderId}})">Open order</button><small>${esc(t.orderCode)}</small>` : ''}</div>`;
     }).join('');
 
-    const free = tables.filter(t => t.status === 'free').length;
+    const free = tables.filter(t => t.status === 'available').length;
     return `<div class="action-bar" id="tableBar">${tableBarHTML()}</div>
         <section class="card">
-            <div class="card-head"><h3>Tables of ${esc(branchName())}</h3><small>${free} free of ${tables.length}</small></div>
-            <div class="legend"><span><i style="background:#43a047"></i>Free</span><span><i style="background:#e53935"></i>Occupied</span></div>
+            <div class="card-head"><h3>Tables of ${esc(branchName())}</h3><small>${free} available of ${tables.length}</small></div>
+            <div class="legend"><span><i style="background:#43a047"></i>Available</span><span><i style="background:#e53935"></i>Occupied</span><span><i style="background:#9e9e9e"></i>Inactive</span></div>
             <div class="tables">${cards}</div>
         </section>`;
 }
 
 const tableBarHTML = () => S.selTable
     ? `<span>Table <b>#${S.selTableNum}</b> selected</span><button class="btn" id="btnCreateOrder" onclick="createOrder()">Create order</button>`
-    : `<span>Tap a <b>free</b> table to start an order</span>`;
+    : `<span>Tap an <b>available</b> table to start an order</span>`;
 
 function selectTable(id, num) {
     S.selTable = id; S.selTableNum = num;
-    $$('.table-card.free').forEach(b => b.classList.toggle('sel', Number(b.dataset.id) === id));
+    $$('.table-card.available').forEach(b => b.classList.toggle('sel', Number(b.dataset.id) === id));
     const bar = $('#tableBar'); if (bar) bar.innerHTML = tableBarHTML();
 }
 
 async function createOrder() {
-    if (!S.selTable) { toast('Select a free table.', 'warn'); return; }
+    if (!S.selTable) { toast('Select an available table.', 'warn'); return; }
     const btn = $('#btnCreateOrder'); if (btn) btn.disabled = true;
     const { ok, data } = await api('/orders', 'POST', { tableId: S.selTable });
     S.selTable = null;
@@ -141,18 +144,22 @@ async function pOrder() {
         S.catalog = c.ok ? sortList(c.data) : [];
     }
 
-    // While the order is open any role can remove products (the units go back to the inventory)
+    // RF-48: while the order is open the Administrator and the Cashier can remove products
+    // (the units go back to the inventory). The Waiter only adds.
+    const canRemove = open && canCharge();
     const rows = o.items.map(i => `<tr>
         <td>${esc(i.name)}<br><small>${esc(i.code)}</small></td><td class="num">${i.quantity}</td>
         <td class="num">${money(i.price)}</td><td class="num"><b>${money(i.subtotal)}</b></td>
-        ${open ? `<td class="act"><button class="btn btn-sm btn-danger" title="Remove from the order" onclick="removeItem(${i.productId})"><i class="fa-solid fa-trash"></i></button></td>` : ''}</tr>`).join('');
+        ${canRemove ? `<td class="act"><button class="btn btn-sm btn-danger" title="Remove from the order" onclick="removeItem(${i.productId})"><i class="fa-solid fa-trash"></i></button></td>` : ''}</tr>`).join('');
 
-    // After the payment the order is CLOSED: no more products, the table is free and it has an invoice
+    // After the payment the order is CLOSED: no more products, the table is available and it has an invoice
     let footer = '';
     if (o.status === 'closed') {
         footer = `<p class="hint"><i class="fa-solid fa-lock"></i> This order is closed: it was paid, the table was released and it can no longer be modified.</p>`;
-    } else if (open && o.items.length) {
+    } else if (canRemove && o.items.length) {
         footer = '<p class="hint"><i class="fa-solid fa-circle-info"></i> Removed products go back to the branch inventory.</p>';
+    } else if (open && o.items.length) {
+        footer = '<p class="hint"><i class="fa-solid fa-lock"></i> Only the cashier or the administrator can remove products from the order.</p>';
     }
 
     const invoiceBtn = o.status === 'closed' && canCharge()
@@ -169,14 +176,14 @@ async function pOrder() {
             <div><span>${o.status === 'cancelled' ? 'Cancelled' : 'Closed'}</span><b>${o.closedAt ? fmtDate(o.closedAt) : '—'}</b></div>
         </div>
         ${o.items.length
-            ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th>${open ? '<th></th>' : ''}</tr></thead><tbody>${rows}</tbody></table></div>`
+            ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Subtotal</th>${canRemove ? '<th></th>' : ''}</tr></thead><tbody>${rows}</tbody></table></div>`
             : `<div class="empty"><span class="big"><i class="fa-solid fa-cart-shopping"></i></span>There are no products in this order yet.</div>`}
         ${footer}
         <div class="ticket-total"><span>Total</span><strong>${money(o.total)}</strong></div>
         ${o.payment ? paymentInfoHTML(o.payment) : ''}
         <div class="btn-row" style="margin-top:18px">
             <button class="btn btn-ghost" onclick="go('${open ? 'tables' : 'orders'}')"><i class="fa-solid fa-arrow-left"></i> Back</button>
-            ${open && !o.items.length ? `<button class="btn btn-danger" onclick="cancelOrder()">Cancel empty order</button>` : ''}
+            ${open && !o.items.length && canCharge() ? `<button class="btn btn-danger" onclick="cancelOrder()">Cancel empty order</button>` : ''}
             ${open && o.items.length && canCharge() ? `<button class="btn btn-ok" onclick="go('checkout',{id:${o.id}})"><i class="fa-solid fa-money-bill-wave"></i> Charge order</button>` : ''}
             ${invoiceBtn}
         </div>
@@ -248,10 +255,10 @@ async function addItem(id) {
 }
 
 async function cancelOrder() {
-    if (!confirm('Cancel this empty order?\nThe table will be free again.')) return;
+    if (!confirm('Cancel this empty order?\nThe table will be available again.')) return;
     const { ok, data } = await api(`/orders/${S.params.id}/cancel`, 'POST');
     if (!ok) { toast(data.error || 'It could not be cancelled.', 'err'); return; }
-    toast('Order cancelled. The table is free.');
+    toast('Order cancelled. The table is available.');
     go('tables');
 }
 
@@ -259,6 +266,15 @@ async function cancelOrder() {
 function paymentInfoHTML(p) {
     const m = PAYMENT_METHODS[p.method] || { name: p.method, icon: '<i class="fa-solid fa-sack-dollar"></i>' };
     const cash = p.method === 'cash';
+    if (p.status === 'pending') {
+        return `<div class="ticket-meta payment-info">
+            <div><span>Payment method</span><b>${m.icon} ${esc(m.name)}</b></div>
+            <div><span>Status</span><b><span class="badge warn">Pending collection</span></b></div>
+            <div><span>Deferred at</span><b>${fmtDate(p.paidAt)}</b></div>
+            <div><span>Amount due</span><b>${money(p.amountPaid)}</b></div>
+            ${p.cashier ? `<div class="full"><span>Registered by</span><b>${esc(p.cashier)}</b></div>` : ''}
+        </div>`;
+    }
     return `<div class="ticket-meta payment-info">
         <div><span>Payment method</span><b>${m.icon} ${esc(m.name)}</b></div>
         <div><span>Paid at</span><b>${fmtDate(p.paidAt)}</b></div>

@@ -68,12 +68,13 @@
                 </div>
                 <div class="login-card">
                     <form id="changePasswordForm">
+                        <div class="input-group"><label>FULL NAME *</label><input type="text" id="cpName" placeholder="Your full name, as registered" autocomplete="off" maxlength="100" required></div>
                         <div class="input-group"><label>USERNAME *</label><input type="text" id="cpUser" placeholder="Your username" autocomplete="off" required></div>
                         <div class="input-group"><label>NEW PASSWORD *</label><input type="password" id="cpNew" placeholder="New password" autocomplete="new-password" maxlength="64" required></div>
                         <div class="input-group"><label>CONFIRM NEW PASSWORD *</label><input type="password" id="cpConfirm" placeholder="Repeat the password" autocomplete="new-password" maxlength="64" required></div>
                         <div class="info-box-dark">
                             <div class="info-title">Security</div>
-                            <div class="info-desc">Ask the administrator to authorize the change from Users. Then type your username and the new password (8 to 64 characters, one uppercase letter, one number, no spaces). The authorization lasts 30 minutes and can be used only once.</div>
+                            <div class="info-desc">Ask the administrator to authorize the change from Users. Then type your full name, your username and the new password (8 to 64 characters, one uppercase letter, one number, no spaces). The authorization lasts 30 minutes and can be used only once.</div>
                         </div>
                         <button type="submit" class="connect-btn">Change password</button>
                         <div class="forgot-password"><a href="#" id="cancelChangePass">Cancel</a></div>

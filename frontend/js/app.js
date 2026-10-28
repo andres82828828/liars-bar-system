@@ -5,8 +5,9 @@
 //  The pages live in js/pages-*.js (loaded before this file).
 // =====================================================================
 
-const IDLE_LIMIT_MS = 180000;   // 3 minutes of inactivity
-const PING_EVERY_MS = 60000;    // tells the server you are still active (at most once per minute)
+const IDLE_LIMIT_MS = 180000;   // 3 minutes of inactivity (RNF-07): the session ends exactly then, here and on the server
+const WARNING_SECONDS = 28;     // the countdown is shown during the last 28 seconds of those 3 minutes
+const PING_EVERY_MS = 5000;     // tells the server you are still active (at most every 5 seconds)
 const LOW_STOCK = 5;            // at or below this, stock is marked "Low"
 const MAX_AMOUNT = 99999999;    // largest money value the database accepts (DECIMAL(10,2))
 
@@ -16,7 +17,9 @@ const STOCKERS = [ROLE.ADMIN, ROLE.CASHIER];              // add stock to the in
 const PAYMENT_METHODS = {
     cash:        { name: 'Cash',        icon: '<i class="fa-solid fa-money-bill-wave"></i>' },
     credit_card: { name: 'Credit card', icon: '<i class="fa-solid fa-credit-card"></i>' },
-    debit_card:  { name: 'Debit card',  icon: '<i class="fa-solid fa-money-check"></i>' }
+    debit_card:  { name: 'Debit card',  icon: '<i class="fa-solid fa-money-check"></i>' },
+    // Closes the order now; the payment stays pending until it is collected from the Cash desk
+    deferred:    { name: 'Deferred payment', icon: '<i class="fa-solid fa-clock"></i>' }
 };
 
 // Only for the "Demo quick access" buttons. Remove this in production.
@@ -205,8 +208,9 @@ async function login(force) {
     } else if (data.code === 'ACTIVE_SESSION') {
         $('#activeUserAccount').textContent = username;
         showAuth('view-active-session');
-    } else if (data.code === 'BAD_PASSWORD') {
-        toast(`Wrong password. Failed attempts: ${data.attempts}/${data.max}`, 'err');
+    } else if (data.code === 'BAD_CREDENTIALS') {
+        // Generic on purpose (OWASP): it does not say whether the username or the password was wrong
+        toast(data.error, 'err');
         if (force) showAuth('view-login');
     } else {
         toast(data.error || 'Could not sign in.', 'err');
@@ -220,14 +224,16 @@ $('#linkForgot').addEventListener('click', (e) => { e.preventDefault(); showAuth
 $('#cancelChangePass').addEventListener('click', (e) => { e.preventDefault(); $('#changePasswordForm').reset(); showAuth('view-login'); });
 $('#changePasswordForm').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const fullName = $('#cpName').value.trim().replace(/\s+/g, ' ');
     const username = $('#cpUser').value.trim();
     const newPassword = $('#cpNew').value, confirmation = $('#cpConfirm').value;
     if (newPassword !== confirmation) { toast('The new passwords do not match.', 'err'); return; }
     const ep = passwordError(newPassword);
     if (ep) { toast(ep, 'err'); return; }
 
-    // No current password: the server only accepts it if the administrator already authorized the change
-    const { ok, data } = await api('/change-password', 'POST', { username, newPassword });
+    // RF-24: identified by full name + username. No current password: the server only accepts it
+    // if the administrator already authorized the change.
+    const { ok, data } = await api('/change-password', 'POST', { fullName, username, newPassword });
     if (ok) {
         e.target.reset();
         userInput.value = username; passwordInput.value = ''; validateLoginForm();
@@ -246,15 +252,15 @@ async function enterApp(user) {
     S.user = user;
     const r = await api('/branches');
     S.branches = r.ok ? r.data : [];
-    S.branchId = isAdmin() ? (S.branches[0] ? S.branches[0].id : null) : user.branchId;
+    const firstBranch = S.branches.find(b => b.active) || S.branches[0];
+    S.branchId = isAdmin() ? (firstBranch ? firstBranch.id : null) : user.branchId;
 
     $('#userName').textContent = user.name;
     $('#userRole').textContent = user.role;
     $('#userAvatar').textContent = user.name.trim().charAt(0).toUpperCase();
     buildNav();
     showShell();
-    lastPing = Date.now();
-    resetIdleTimer();
+    startIdleTimer();          // the login / session check just touched the server
     go('home');
 }
 
@@ -273,7 +279,8 @@ function passwordError(p) {
 //  Sign out (HU-003) and inactivity (HU-004)
 // ---------------------------------------------------------------------
 async function signOut() {
-    if (S.token) await api('/logout', 'POST');
+    // The local session is always closed, even if the server cannot be reached
+    if (S.token) { try { await api('/logout', 'POST'); } catch (e) { /* server unreachable */ } }
     clearLocalSession();
     userInput.value = ''; passwordInput.value = '';
     validateLoginForm();
@@ -292,21 +299,26 @@ $('#confirmLogout').addEventListener('click', async () => {
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { $('#modalLogout').hidden = true; $('#modalNotice').hidden = true; } });
 
+// The 3 minutes count from the last time the server heard from us, so the client and the server
+// close the session at the same moment. Activity pings the server at most every PING_EVERY_MS.
+function startIdleTimer() {
+    lastPing = Date.now();
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(triggerInactivityTimeout, IDLE_LIMIT_MS - WARNING_SECONDS * 1000);
+}
+
 function resetIdleTimer() {
     if (!S.user || timeoutVisible) return;
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(triggerInactivityTimeout, IDLE_LIMIT_MS);
-    if (Date.now() - lastPing > PING_EVERY_MS) {      // keeps the session alive on the server
-        lastPing = Date.now();
-        api('/keepalive', 'POST');
-    }
+    if (Date.now() - lastPing < PING_EVERY_MS) return;
+    startIdleTimer();
+    api('/keepalive', 'POST');
 }
 
 function triggerInactivityTimeout() {
     timeoutVisible = true;
     $('#modalLogout').hidden = true;
     $('#modalTimeout').hidden = false;
-    let secondsLeft = 28;
+    let secondsLeft = WARNING_SECONDS;
     $('#timer-text').textContent = `${secondsLeft}s`;
     $('#countdownNumber').textContent = `${secondsLeft} seconds`;
 
@@ -316,6 +328,7 @@ function triggerInactivityTimeout() {
         $('#timer-text').textContent = `${secondsLeft}s`;
         $('#countdownNumber').textContent = `${secondsLeft} seconds`;
         if (secondsLeft <= 0) {
+            clearInterval(countdownTimer);         // stop first: signOut may fail if the server is unreachable
             await signOut();
             showAuth('view-login');
             toast('Session closed after a long period of inactivity (3 minutes).', 'warn');
@@ -366,7 +379,7 @@ $('#backdrop').addEventListener('click', closeSidebar);
 
 const PAGES = {
     home:      { title: 'Home', sub: 'Operations overview', branch: true, render: pHome },
-    tables:    { title: 'Tables & orders', sub: 'Select a free table to start an order', branch: true, render: pTables },
+    tables:    { title: 'Tables & orders', sub: 'Select an available table to start an order', branch: true, render: pTables },
     cash:      { title: 'Cash desk', sub: 'Open orders pending payment', branch: true, roles: CASHIERS, render: pCashDesk },
     checkout:  { title: 'Charge order', sub: '', nav: 'cash', roles: CASHIERS, render: pCheckout, after: renderMethod },
     invoices:  { title: 'Invoices', sub: 'Invoices issued for paid orders', branch: true, roles: CASHIERS, render: pInvoices },

@@ -1,9 +1,9 @@
 // =====================================================================
-//  Users (Administrator only): list, create, activate / deactivate,
-//  authorize a password change
+//  Users (Administrator only): list, create, edit (name, role, branch),
+//  activate / deactivate, authorize a password change
 // =====================================================================
 const bcrypt = require('bcryptjs');
-const { validateUser } = require('../validators');
+const { validateUser, validateUserEdit } = require('../validators');
 const { MAX_ATTEMPTS } = require('./auth');
 
 const RESET_TTL_MIN = 30;     // minutes the administrator's password-change authorization lasts
@@ -13,7 +13,7 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, closeUserS
   app.get('/api/users', auth, adminOnly, wrap(async (req, res) => {
     const { rows } = await pool.query(`
       SELECT u.user_id AS id, u.username, u.full_name AS name, u.role,
-             u.active, (u.failed_attempts >= $1) AS locked, b.name AS branch,
+             u.active, (u.failed_attempts >= $1) AS locked, u.branch_id AS "branchId", b.name AS branch,
              (u.reset_authorized_until IS NOT NULL AND u.reset_authorized_until > NOW()) AS "resetAuthorized"
         FROM app_user u LEFT JOIN branch b ON b.branch_id = u.branch_id
        ORDER BY u.user_id`, [MAX_ATTEMPTS]);
@@ -24,8 +24,9 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, closeUserS
     const { fullName, username, password, role, branchId } = validateUser(req.body);
 
     if (branchId) {
-      const b = await pool.query('SELECT 1 FROM branch WHERE branch_id = $1', [branchId]);
+      const b = await pool.query('SELECT active FROM branch WHERE branch_id = $1', [branchId]);
       if (!b.rowCount) throw new HttpError(400, 'The selected branch does not exist.');
+      if (!b.rows[0].active) throw new HttpError(400, 'The selected branch is inactive.');
     }
     // Case-insensitive: "APerez" and "aperez" are considered the same user
     const dup = await pool.query('SELECT 1 FROM app_user WHERE LOWER(username) = LOWER($1)', [username]);
@@ -44,6 +45,31 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError, closeUserS
     }
     await log(req.user.id, 'users', `Created user "${username}" (${role})`);
     res.status(201).json({ id: r.rows[0].user_id });
+  }));
+
+  // Edit a user (RF-01, profiles and permissions): full name, role and branch.
+  // If the role or the branch changes, the user's open session is closed so the new permissions apply.
+  app.put('/api/users/:id', auth, adminOnly, wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const { fullName, role, branchId } = validateUserEdit(req.body);
+    const cur = await pool.query('SELECT username, role, branch_id FROM app_user WHERE user_id = $1', [id]);
+    if (!cur.rowCount) throw new HttpError(404, 'User not found.');
+    const before = cur.rows[0];
+    if (id === req.user.id && role !== before.role) throw new HttpError(400, 'You cannot change your own role; ask another administrator.');
+    if (branchId) {
+      const b = await pool.query('SELECT active FROM branch WHERE branch_id = $1', [branchId]);
+      if (!b.rowCount) throw new HttpError(400, 'The selected branch does not exist.');
+      if (!b.rows[0].active) throw new HttpError(400, 'The selected branch is inactive.');
+    }
+
+    await pool.query('UPDATE app_user SET full_name = $1, role = $2, branch_id = $3 WHERE user_id = $4', [fullName, role, branchId, id]);
+    const permissionsChanged = role !== before.role || branchId !== before.branch_id;
+    if (permissionsChanged && id !== req.user.id) {
+      closeUserSessions(id);
+      await pool.query('UPDATE app_user SET session_token = NULL WHERE user_id = $1', [id]);
+    }
+    await log(req.user.id, 'users', `Edited user "${before.username}": ${fullName}, ${role}` + (branchId ? ` (branch ${branchId})` : ''));
+    res.json({ ok: true, sessionClosed: permissionsChanged && id !== req.user.id });
   }));
 
   // The Administrator AUTHORIZES someone else to change their password (they do not type it).

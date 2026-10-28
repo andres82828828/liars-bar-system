@@ -40,8 +40,9 @@ async function pReport() {
     const branchRows = rep.byBranch.map(b => `<tr><td><b>${esc(b.branch)}</b></td><td class="num">${b.orders}</td><td class="num">${b.units}</td>
         <td class="num">${money(b.revenue)}</td><td class="num">${money(b.cost)}</td><td class="num"><b>${money(b.profit)}</b></td><td class="num">${b.margin}%</td></tr>`).join('');
 
-    const productRowsHtml = rep.byProduct.map(p => `<tr class="rep-row" data-q="${esc((p.product + ' ' + p.code + ' ' + p.type + ' ' + p.branch).toLowerCase())}">
-        <td>${esc(p.branch)}</td><td><b>${esc(p.product)}</b><br><small>${esc(p.code)} · ${esc(p.type)}</small></td>
+    const productRowsHtml = rep.byProduct.map(p => `<tr class="rep-row" data-q="${esc((p.product + ' ' + p.code + ' ' + p.type + ' ' + p.branch + ' ' + p.day).toLowerCase())}">
+        <td>${esc(p.day)}</td><td>${esc(p.branch)}</td><td><b>${esc(p.product)}</b><br><small>${esc(p.code)} · ${esc(p.type)}</small></td>
+        <td class="num">${money(p.unitCost)}</td><td class="num">${money(p.unitPrice)}</td>
         <td class="num">${p.units}</td><td class="num">${money(p.revenue)}</td><td class="num">${money(p.cost)}</td>
         <td class="num"><b class="${p.profit < 0 ? 'neg' : ''}">${money(p.profit)}</b></td><td class="num">${p.margin}%</td></tr>`).join('');
 
@@ -63,8 +64,8 @@ async function pReport() {
     <section class="card">
         <div class="card-head"><h3>By product</h3>
             <input class="search" placeholder="Search product…" oninput="filterRows(this.value,'.rep-row')"></div>
-        ${rep.byProduct.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Branch</th><th>Product</th><th class="num">Units</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th></tr></thead>
-            <tbody>${productRowsHtml}${totalRow(2)}<td class="num">${s.units}</td><td class="num">${money(s.revenue)}</td><td class="num">${money(s.cost)}</td><td class="num">${money(s.profit)}</td><td class="num">${s.margin}%</td></tr></tbody></table></div>` : empty}
+        ${rep.byProduct.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Branch</th><th>Product</th><th class="num">Purchase value</th><th class="num">Sale value</th><th class="num">Units</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th></tr></thead>
+            <tbody>${productRowsHtml}${totalRow(5)}<td class="num">${s.units}</td><td class="num">${money(s.revenue)}</td><td class="num">${money(s.cost)}</td><td class="num">${money(s.profit)}</td><td class="num">${s.margin}%</td></tr></tbody></table></div>` : empty}
     </section>
     <section class="card">
         <div class="card-head"><h3>Sales</h3><small>One row per paid order · dates by ${esc(rep.filters.dateByLabel.toLowerCase())}</small>
@@ -162,8 +163,27 @@ async function pUsers() {
     const r = await api('/users');
     if (!r.ok) return errCard(r.data.error);
     S.users = r.data;
+    const activeBranches = S.branches.filter(b => b.active !== false);
 
-    const form = `<section class="card">
+    // Edit mode (RF-01): name, role and branch. The username and the password are not edited here.
+    const editing = S.editUser ? S.users.find(u => u.id === S.editUser) : null;
+    const roleOptions = (sel) => [ROLE.CASHIER, ROLE.WAITER, ROLE.ADMIN].map(x => `<option ${x === sel ? 'selected' : ''}>${x}</option>`).join('');
+    const editForm = editing && `<section class="card">
+        <div class="card-head"><h3>Edit user</h3><small>${esc(editing.username)}</small></div>
+        <div class="field"><label>Full name *</label><input id="newName" value="${esc(editing.name)}" maxlength="100"></div>
+        <div class="row2">
+            <div class="field"><label>Role *</label>
+                <select id="newRole" onchange="roleChange()" ${editing.id === S.user.id ? 'disabled title="You cannot change your own role"' : ''}>${roleOptions(editing.role)}</select></div>
+            <div class="field"><label>Assigned branch *</label><select id="newBranch" ${editing.role === ROLE.ADMIN ? 'disabled' : ''}>${optionsHTML(activeBranches, editing.branchId || S.branchId)}</select></div>
+        </div>
+        <span class="hint" style="margin:-8px 0 12px">If the role or the branch changes, the user's open session is closed so the new permissions apply.</span>
+        <div class="btn-row">
+            <button class="btn" onclick="saveUserEdit(${editing.id})">Save changes</button>
+            <button class="btn btn-ghost" onclick="S.editUser=null;go('users')">Cancel edit</button>
+        </div>
+    </section>`;
+
+    const form = editForm || `<section class="card">
         <div class="card-head"><h3>Register user</h3></div>
         <div class="field"><label>Full name *</label><input id="newName" placeholder="e.g. Ana Gómez" maxlength="100"></div>
         <div class="row2">
@@ -174,7 +194,7 @@ async function pUsers() {
         <div class="row2">
             <div class="field"><label>Role *</label>
                 <select id="newRole" onchange="roleChange()"><option>Cashier</option><option>Waiter</option><option>Administrator</option></select></div>
-            <div class="field"><label>Assigned branch *</label><select id="newBranch">${optionsHTML(S.branches, S.branchId)}</select></div>
+            <div class="field"><label>Assigned branch *</label><select id="newBranch">${optionsHTML(activeBranches, S.branchId)}</select></div>
         </div>
         <button class="btn btn-block" onclick="createUser()">Save user</button>
     </section>`;
@@ -182,7 +202,7 @@ async function pUsers() {
     const rows = r.data.map(u => {
         let status = !u.active ? '<span class="badge warn">Deactivated</span>' : (u.locked ? '<span class="badge locked">Locked</span>' : '<span class="badge active">Active</span>');
         if (u.resetAuthorized) status += ' <span class="badge warn" title="Can change their password from the login screen">Change authorized</span>';
-        const actions = !u.active
+        const actions = `<button class="btn btn-sm btn-ghost" onclick="S.editUser=${u.id};go('users')">Edit</button> ` + (!u.active
             ? `<button class="btn btn-sm btn-ok" onclick="setUserStatus(${u.id},true)">Activate</button>`
             : (u.locked ? `<button class="btn btn-sm btn-ok" onclick="setUserStatus(${u.id},true)">Unlock</button> ` : '')
               + `<button class="btn btn-sm btn-danger" onclick="setUserStatus(${u.id},false)">Deactivate</button>`
@@ -190,7 +210,7 @@ async function pUsers() {
                   ? (u.resetAuthorized
                       ? ` <button class="btn btn-sm btn-ghost" title="Cancel the authorization" onclick="authorizePasswordChange(${u.id},false)">Cancel change</button>`
                       : ` <button class="btn btn-sm btn-ghost" title="Allow the user to change their password" onclick="authorizePasswordChange(${u.id},true)"><i class="fa-solid fa-key"></i> Reset password</button>`)
-                  : '');
+                  : ''));
         return `<tr><td><b>${esc(u.username)}</b><br><small>${esc(u.name)}</small></td><td>${esc(u.role)}<br><small>${esc(u.branch || 'All branches')}</small></td>
             <td>${status}</td><td class="act">${actions}</td></tr>`;
     }).join('');
@@ -239,6 +259,21 @@ async function createUser() {
     go('users');
 }
 
+// Saves the edited name, role and branch (RF-01)
+async function saveUserEdit(id) {
+    const fullName = $('#newName').value.trim().replace(/\s+/g, ' ');
+    const role = $('#newRole').value, branchId = $('#newBranch').value;
+    if (fullName.length < 3 || fullName.length > 100) { toast('The full name must be between 3 and 100 characters.', 'warn'); return; }
+    if (!NAME_RE.test(fullName)) { toast('The full name can only contain letters, spaces, periods, hyphens and apostrophes.', 'warn'); return; }
+    if (role !== ROLE.ADMIN && !branchId) { toast('Select a branch for this role.', 'warn'); return; }
+    const { ok, data } = await api(`/users/${id}`, 'PUT', { fullName, role, branchId: role === ROLE.ADMIN ? null : Number(branchId) });
+    if (!ok) { toast(data.error || 'The user could not be updated.', 'err'); return; }
+    toast(data.sessionClosed ? 'User updated. Their session was closed so the new permissions apply.' : 'User updated.');
+    if (id === S.user.id) { S.user.name = fullName; $('#userName').textContent = fullName; }
+    S.editUser = null;
+    go('users');
+}
+
 // The admin authorizes (or cancels) that the user changes their own password from the login screen
 async function authorizePasswordChange(id, authorize) {
     const { ok, data } = await api(`/users/${id}/reset`, authorize ? 'PUT' : 'DELETE');
@@ -263,31 +298,93 @@ async function pBranches() {
     const r = await api('/branches');
     if (r.ok) S.branches = r.data;
 
-    const branchForm = `<section class="card"><div class="card-head"><h3>Create branch</h3></div>
-        <div class="field"><label>Branch name *</label><input id="branchName" placeholder="e.g. North Branch" maxlength="50"></div>
-        <div class="field"><label>Address *</label><input id="branchAddress" placeholder="e.g. Calle 85 # 12-45" maxlength="100"></div>
-        <button class="btn btn-block" onclick="createBranch()">Register branch</button></section>`;
+    // RF-02 / RF-03: branches and tables are edited and deactivated, never deleted
+    const editing = S.editBranch ? S.branches.find(b => b.id === S.editBranch) : null;
+    const branchForm = `<section class="card"><div class="card-head"><h3>${editing ? 'Edit branch' : 'Create branch'}</h3></div>
+        <div class="field"><label>Branch name *</label><input id="branchName" placeholder="e.g. North Branch" maxlength="50" value="${esc(editing ? editing.name : '')}"></div>
+        <div class="field"><label>Address *</label><input id="branchAddress" placeholder="e.g. Calle 85 # 12-45" maxlength="100" value="${esc(editing ? editing.address : '')}"></div>
+        ${editing
+            ? `<div class="btn-row"><button class="btn" onclick="saveBranch(${editing.id})">Save changes</button>
+                   <button class="btn btn-ghost" onclick="S.editBranch=null;go('branches')">Cancel edit</button></div>`
+            : '<button class="btn btn-block" onclick="saveBranch()">Register branch</button>'}</section>`;
 
     const tableForm = `<section class="card"><div class="card-head"><h3>Create table per branch</h3></div>
-        <div class="field"><label>Branch *</label><select id="tableBranch">${optionsHTML(S.branches, S.branchId, 'Select branch…')}</select></div>
+        <div class="field"><label>Branch *</label><select id="tableBranch">${optionsHTML(S.branches.filter(b => b.active), S.branchId, 'Select branch…')}</select></div>
         <div class="field"><label>Table number *</label><input type="number" id="tableNumber" min="1" max="9999" placeholder="e.g. 4"></div>
         <button class="btn btn-block" onclick="createTable()">Add table</button></section>`;
 
     const list = `<section class="card"><div class="card-head"><h3>Registered branches</h3><small>${S.branches.length} branch(es)</small></div>
-        <div class="table-wrap"><table class="tbl"><thead><tr><th>Branch</th><th>Address</th></tr></thead><tbody>
-        ${S.branches.map(b => `<tr><td><b>${esc(b.name)}</b></td><td>${esc(b.address)}</td></tr>`).join('')}</tbody></table></div></section>`;
+        <div class="table-wrap"><table class="tbl"><thead><tr><th>Branch</th><th>Address</th><th>Status</th><th></th></tr></thead><tbody>
+        ${S.branches.map(b => `<tr><td><b>${esc(b.name)}</b></td><td>${esc(b.address)}</td>
+            <td>${b.active ? '<span class="badge active">Active</span>' : '<span class="badge warn">Inactive</span>'}</td>
+            <td class="act"><button class="btn btn-sm btn-ghost" onclick="S.editBranch=${b.id};go('branches')">Edit</button>
+                ${b.active ? `<button class="btn btn-sm btn-danger" onclick="setBranchStatus(${b.id},false)">Deactivate</button>`
+                           : `<button class="btn btn-sm btn-ok" onclick="setBranchStatus(${b.id},true)">Activate</button>`}</td></tr>`).join('')}
+        </tbody></table></div></section>`;
 
-    return `<div class="split even"><div class="stack">${branchForm}${tableForm}</div>${list}</div>`;
+    // Tables of one branch: renumber and availability
+    if (!S.tablesBranch || !S.branches.some(b => b.id === S.tablesBranch)) S.tablesBranch = S.branchId || (S.branches[0] || {}).id;
+    const t = S.tablesBranch ? await api(`/tables?branch_id=${S.tablesBranch}`) : { ok: true, data: [] };
+    const tableStatus = (x) => x.status === 'inactive' ? '<span class="badge warn">Inactive</span>'
+        : (x.status === 'occupied' ? '<span class="badge locked">Occupied</span>' : '<span class="badge active">Available</span>');
+    const tablesCard = `<section class="card"><div class="card-head"><h3>Tables</h3>
+            <select onchange="S.tablesBranch=Number(this.value);go('branches')">${optionsHTML(S.branches, S.tablesBranch)}</select></div>
+        ${t.ok && t.data.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>Table</th><th>Status</th><th></th></tr></thead><tbody>
+            ${t.data.map(x => `<tr><td><b>#${x.number}</b></td><td>${tableStatus(x)}</td>
+                <td class="act"><button class="btn btn-sm btn-ghost" onclick="renumberTable(${x.id},${x.number})">Change number</button>
+                    ${x.status === 'inactive' ? `<button class="btn btn-sm btn-ok" onclick="setTableStatus(${x.id},true)">Activate</button>`
+                      : `<button class="btn btn-sm btn-danger" ${x.status === 'occupied' ? 'disabled title="It has an open order"' : ''} onclick="setTableStatus(${x.id},false)">Deactivate</button>`}</td></tr>`).join('')}
+            </tbody></table></div>` : `<div class="empty">${t.ok ? 'This branch has no tables yet.' : esc(t.data.error)}</div>`}
+    </section>`;
+
+    return `<div class="split even"><div class="stack">${branchForm}${tableForm}</div><div class="stack">${list}${tablesCard}</div></div>`;
 }
 
-async function createBranch() {
+// Creates a branch, or saves the edited one (id)
+async function saveBranch(id) {
     const name = $('#branchName').value.trim(), address = $('#branchAddress').value.trim();
     if (!name || !address) { toast('Please fill in all branch fields.', 'warn'); return; }
-    const { ok, data } = await api('/branches', 'POST', { name, address });
-    if (!ok) { toast(data.error || 'The branch could not be created.', 'err'); return; }
-    toast(`Branch "${name}" registered successfully.`);
-    if (!S.branchId) S.branchId = data.id;
+    const { ok, data } = id ? await api(`/branches/${id}`, 'PUT', { name, address }) : await api('/branches', 'POST', { name, address });
+    if (!ok) { toast(data.error || 'The branch could not be saved.', 'err'); return; }
+    toast(id ? `Branch "${name}" updated.` : `Branch "${name}" registered successfully.`);
+    if (!id && !S.branchId) S.branchId = data.id;
+    S.editBranch = null;
+    await refreshBranches();
     go('branches');
+}
+
+async function setBranchStatus(id, active) {
+    const b = S.branches.find(x => x.id === id);
+    if (!active && !confirm(`Deactivate the branch "${b ? b.name : ''}"?\nIts staff will not be able to sign in and it will not receive orders until it is activated again.`)) return;
+    const { ok, status, data } = await api(`/branches/${id}/status`, 'PATCH', { active });
+    if (status === 409) { notice('The branch cannot be deactivated', data.error); return; }
+    if (!ok) { toast(data.error || 'The status could not be changed.', 'err'); return; }
+    toast(`Branch ${active ? 'activated' : 'deactivated'}.`);
+    await refreshBranches();
+    go('branches');
+}
+
+async function renumberTable(id, current) {
+    const v = prompt(`New number for table #${current}:`, String(current));
+    if (v === null || v.trim() === String(current)) return;
+    const { ok, data } = await api(`/tables/${id}`, 'PUT', { number: Number(v) });
+    if (!ok) { toast(data.error || 'The table could not be updated.', 'err'); return; }
+    toast(`Table #${current} is now #${Number(v)}.`);
+    go('branches');
+}
+
+async function setTableStatus(id, active) {
+    const { ok, status, data } = await api(`/tables/${id}/status`, 'PATCH', { active });
+    if (status === 409) { notice('The table cannot be deactivated', data.error); return; }
+    if (!ok) { toast(data.error || 'The status could not be changed.', 'err'); return; }
+    toast(`Table ${active ? 'activated' : 'deactivated'}.`);
+    go('branches');
+}
+
+// Reloads the branch list used by the menus (names or status may have changed)
+async function refreshBranches() {
+    const r = await api('/branches');
+    if (r.ok) S.branches = r.data;
 }
 
 async function createTable() {
@@ -296,5 +393,6 @@ async function createTable() {
     const { ok, data } = await api('/tables', 'POST', { branchId: Number(branchId), number: Number(number) });
     if (!ok) { toast(data.error || 'The table could not be created.', 'err'); return; }
     toast(`Table #${number} created successfully.`);
-    $('#tableNumber').value = '';
+    S.tablesBranch = Number(branchId);
+    go('branches');
 }

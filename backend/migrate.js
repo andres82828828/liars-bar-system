@@ -103,14 +103,14 @@ async function fromSpanish(c) {
   }
 
   // Status / role / method values
-  await c.query(`UPDATE bar_table SET status = CASE status WHEN 'libre' THEN 'free' WHEN 'ocupada' THEN 'occupied' ELSE status END`);
+  await c.query(`UPDATE bar_table SET status = CASE status WHEN 'libre' THEN 'available' WHEN 'ocupada' THEN 'occupied' ELSE status END`);
   await c.query(`UPDATE app_user SET role = CASE role WHEN 'Administrador' THEN 'Administrator' WHEN 'Cajero' THEN 'Cashier'
                                                        WHEN 'Mesero' THEN 'Waiter' ELSE role END`);
   await c.query(`UPDATE customer_order SET status = CASE status WHEN 'abierto' THEN 'open' WHEN 'pagado' THEN 'closed'
                                                                WHEN 'cancelado' THEN 'cancelled' ELSE status END`);
   await c.query(`UPDATE payment SET method = CASE method WHEN 'efectivo' THEN 'cash' WHEN 'tarjeta_credito' THEN 'credit_card'
                                                           WHEN 'tarjeta_debito' THEN 'debit_card' ELSE method END`);
-  await c.query(`ALTER TABLE bar_table ALTER COLUMN status SET DEFAULT 'free'`);
+  await c.query(`ALTER TABLE bar_table ALTER COLUMN status SET DEFAULT 'available'`);
   await c.query(`ALTER TABLE customer_order ALTER COLUMN status SET DEFAULT 'open'`);
 
   for (const [table, oldName, newName] of CONSTRAINTS) {
@@ -121,7 +121,7 @@ async function fromSpanish(c) {
 
   // New English CHECK constraints. The margin rule is NOT VALID: it applies to new/edited
   // products without failing if an old product was saved below cost.
-  await c.query(`ALTER TABLE bar_table ADD CONSTRAINT ck_table_status CHECK (status IN ('free','occupied'))`);
+  await c.query(`ALTER TABLE bar_table ADD CONSTRAINT ck_table_status CHECK (status IN ('available','occupied'))`);
   await c.query(`ALTER TABLE app_user ADD CONSTRAINT ck_user_role CHECK (role IN ('Administrator','Cashier','Waiter'))`);
   await c.query(`ALTER TABLE customer_order ADD CONSTRAINT ck_order_status CHECK (status IN ('open','closed','cancelled'))`);
   await c.query(`ALTER TABLE payment ADD CONSTRAINT ck_payment_method CHECK (method IN ('cash','credit_card','debit_card'))`);
@@ -134,6 +134,40 @@ async function fromSpanish(c) {
 
 // Columns added by this version (no-op when they already exist)
 async function addNewColumns(c) {
+  // Table status: 'free' renamed to 'available' ("free" means "no charge" in English; RF-25)
+  // and new 'inactive' value (RF-03: a table is deactivated instead of deleted)
+  const ck = await c.query(`SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'ck_table_status'`);
+  if (!ck.rowCount || !/'inactive'/.test(ck.rows[0].def)) {
+    await c.query('ALTER TABLE bar_table DROP CONSTRAINT IF EXISTS ck_table_status');
+    await c.query(`UPDATE bar_table SET status = 'available' WHERE status = 'free'`);
+    await c.query(`ALTER TABLE bar_table ADD CONSTRAINT ck_table_status CHECK (status IN ('available','occupied','inactive'))`);
+    await c.query(`ALTER TABLE bar_table ALTER COLUMN status SET DEFAULT 'available'`);
+  }
+  // RF-02: a branch is deactivated instead of deleted
+  await c.query('ALTER TABLE branch ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE');
+
+  // Deferred payment: new 'deferred' method and payment status ('paid' / 'pending')
+  await c.query(`ALTER TABLE payment ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'paid'`);
+  const pm = await c.query(`SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'ck_payment_method'`);
+  if (!pm.rowCount || !/'deferred'/.test(pm.rows[0].def)) {
+    await c.query('ALTER TABLE payment DROP CONSTRAINT IF EXISTS ck_payment_method');
+    await c.query(`ALTER TABLE payment ADD CONSTRAINT ck_payment_method CHECK (method IN ('cash','credit_card','debit_card','deferred'))`);
+  }
+  if (!(await constraintExists(c, 'ck_payment_status'))) {
+    await c.query(`ALTER TABLE payment ADD CONSTRAINT ck_payment_status CHECK (status IN ('paid','pending'))`);
+  }
+
+  // RNF-22: the audit trail is INSERT-only, enforced by the database
+  await c.query(`CREATE OR REPLACE FUNCTION audit_log_readonly() RETURNS trigger AS $$
+                 BEGIN RAISE EXCEPTION 'audit_log is append-only: records cannot be modified or deleted'; END;
+                 $$ LANGUAGE plpgsql`);
+  await c.query('DROP TRIGGER IF EXISTS trg_audit_log_readonly ON audit_log');
+  await c.query(`CREATE TRIGGER trg_audit_log_readonly BEFORE UPDATE OR DELETE ON audit_log
+                 FOR EACH ROW EXECUTE FUNCTION audit_log_readonly()`);
+  await c.query('DROP TRIGGER IF EXISTS trg_audit_log_no_truncate ON audit_log');
+  await c.query(`CREATE TRIGGER trg_audit_log_no_truncate BEFORE TRUNCATE ON audit_log
+                 FOR EACH STATEMENT EXECUTE FUNCTION audit_log_readonly()`);
+
   await c.query(`ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS category VARCHAR(20) NOT NULL DEFAULT 'general'`);
   await c.query('CREATE INDEX IF NOT EXISTS idx_log_date ON audit_log (created_at)');
 

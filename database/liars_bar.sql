@@ -15,18 +15,19 @@ DROP TABLE IF EXISTS invoice_detail, invoice, payment, order_detail, customer_or
 CREATE TABLE branch (
     branch_id   INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name        VARCHAR(50)  NOT NULL UNIQUE,
-    address     VARCHAR(100) NOT NULL
+    address     VARCHAR(100) NOT NULL,
+    active      BOOLEAN      NOT NULL DEFAULT TRUE   -- deactivated instead of deleted (RF-02)
 );
 
 CREATE TABLE bar_table (
     table_id    INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     branch_id   INT NOT NULL,
     number      INT NOT NULL,
-    status      VARCHAR(20) NOT NULL DEFAULT 'free',
+    status      VARCHAR(20) NOT NULL DEFAULT 'available',
     CONSTRAINT fk_table_branch FOREIGN KEY (branch_id) REFERENCES branch(branch_id)
         ON UPDATE CASCADE ON DELETE RESTRICT,
     CONSTRAINT uq_table_branch_number UNIQUE (branch_id, number),
-    CONSTRAINT ck_table_status CHECK (status IN ('free','occupied'))
+    CONSTRAINT ck_table_status CHECK (status IN ('available','occupied','inactive'))
 );
 
 -- ---------------------------------------------------------------------
@@ -61,6 +62,17 @@ CREATE TABLE audit_log (
 );
 CREATE INDEX idx_log_user_date ON audit_log (user_id, created_at);
 CREATE INDEX idx_log_date ON audit_log (created_at);
+
+-- The audit trail is INSERT-only (RNF-22): the database itself rejects any change or deletion
+CREATE OR REPLACE FUNCTION audit_log_readonly() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_log is append-only: records cannot be modified or deleted';
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_audit_log_readonly BEFORE UPDATE OR DELETE ON audit_log
+    FOR EACH ROW EXECUTE FUNCTION audit_log_readonly();
+CREATE TRIGGER trg_audit_log_no_truncate BEFORE TRUNCATE ON audit_log
+    FOR EACH STATEMENT EXECUTE FUNCTION audit_log_readonly();
 
 -- ---------------------------------------------------------------------
 --  3. PRODUCTS AND INVENTORY
@@ -146,11 +158,13 @@ CREATE TABLE payment (
     method          VARCHAR(30)   NOT NULL,
     paid_at         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     change_amount   DECIMAL(10,2) NOT NULL DEFAULT 0,
+    status          VARCHAR(20)   NOT NULL DEFAULT 'paid',   -- 'pending' = deferred payment not collected yet
     CONSTRAINT fk_payment_order FOREIGN KEY (order_id) REFERENCES customer_order(order_id)
         ON UPDATE CASCADE ON DELETE RESTRICT,
     CONSTRAINT fk_payment_cashier FOREIGN KEY (cashier_id) REFERENCES app_user(user_id)
         ON UPDATE CASCADE ON DELETE SET NULL,
-    CONSTRAINT ck_payment_method CHECK (method IN ('cash','credit_card','debit_card')),
+    CONSTRAINT ck_payment_method CHECK (method IN ('cash','credit_card','debit_card','deferred')),
+    CONSTRAINT ck_payment_status CHECK (status IN ('paid','pending')),
     CONSTRAINT ck_payment_amounts CHECK (amount_paid > 0 AND change_amount >= 0)
 );
 
@@ -190,11 +204,11 @@ INSERT INTO branch (name, address) VALUES
   ('Galerías', 'Cl. 53 # 27-24');
 
 INSERT INTO bar_table (branch_id, number, status) VALUES
-  (1, 1, 'free'),
+  (1, 1, 'available'),
   (1, 2, 'occupied'),
-  (2, 1, 'free'),
-  (2, 2, 'free'),
-  (3, 1, 'free');
+  (2, 1, 'available'),
+  (2, 2, 'available'),
+  (3, 1, 'available');
 
 -- Passwords (bcrypt hash):  Admin123* / Cajero123* / Mesero123*
 INSERT INTO app_user (branch_id, username, password_hash, full_name, role) VALUES

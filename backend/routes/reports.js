@@ -11,7 +11,7 @@ const { parseDate } = require('../validators');
 
 module.exports = ({ app, pool, auth, allow, log, wrap, HttpError, ROLES }) => {
 
-  const METHOD_NAMES = { cash: 'Cash', credit_card: 'Credit card', debit_card: 'Debit card' };
+  const METHOD_NAMES = { cash: 'Cash', credit_card: 'Credit card', debit_card: 'Debit card', deferred: 'Deferred (pending)' };
   // Which date the period applies to (whitelisted column, never taken from the request as SQL)
   const DATE_BY = {
     order:   { col: 'o.created_at', label: 'Order date (taken)' },
@@ -62,14 +62,17 @@ module.exports = ({ app, pool, auth, allow, log, wrap, HttpError, ROLES }) => {
     const params = [f.from, f.to, f.branch ? f.branch.id : null];
     const SALES_FROM = salesFrom(f.dateBy);
 
+    // One row per day, branch, product and frozen price: shows the date and the unit purchase / sale value
+    const dayCol = DATE_BY[f.dateBy].col;
     const byProduct = (await pool.query(`
-      SELECT b.name AS branch, p.code, p.name AS product, ty.name AS type,
+      SELECT (${dayCol})::date::text AS day, b.name AS branch, p.code, p.name AS product, ty.name AS type,
+             d.unit_cost::float AS "unitCost", d.unit_price::float AS "unitPrice",
              SUM(d.quantity)::int AS units,
              SUM(d.quantity * d.unit_price)::float AS revenue,
              SUM(d.quantity * d.unit_cost)::float AS cost
       ${SALES_FROM}
-      GROUP BY b.name, p.product_id, p.code, p.name, ty.name
-      ORDER BY b.name, revenue DESC, p.code`, params)).rows;
+      GROUP BY (${dayCol})::date, b.name, p.product_id, p.code, p.name, ty.name, d.unit_cost, d.unit_price
+      ORDER BY day, b.name, revenue DESC, p.code`, params)).rows;
 
     const sales = (await pool.query(`
       SELECT o.unique_code AS "orderCode", b.name AS branch, t.number AS "table", o.created_at AS "takenAt",
@@ -185,11 +188,12 @@ module.exports = ({ app, pool, auth, allow, log, wrap, HttpError, ROLES }) => {
 
     // Sheet 3: By product
     const ws3 = addSheet(wb, 'By product', [
-      { header: 'Branch', key: 'branch', width: 18 }, { header: 'Code', key: 'code', width: 12 },
+      { header: 'Date', key: 'day', width: 12 }, { header: 'Branch', key: 'branch', width: 18 }, { header: 'Code', key: 'code', width: 12 },
       { header: 'Product', key: 'product', width: 30 }, { header: 'Type', key: 'type', width: 14 },
+      { header: 'Purchase value', key: 'unitCost', money: true }, { header: 'Sale value', key: 'unitPrice', money: true },
       { header: 'Units', key: 'units', width: 10 }, ...moneyCols], report.byProduct);
     const last3 = ws3.rowCount;
-    addTotalRow(ws3, { branch: 'TOTAL', units: s.units, revenue: s.revenue, cost: s.cost, profit: s.profit, margin: s.margin });
+    addTotalRow(ws3, { day: 'TOTAL', units: s.units, revenue: s.revenue, cost: s.cost, profit: s.profit, margin: s.margin });
 
     // Sheet 4: Sales (one row per closed order)
     const ws4 = addSheet(wb, 'Sales', [

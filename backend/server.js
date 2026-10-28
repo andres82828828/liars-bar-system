@@ -1,14 +1,31 @@
 const path = require('path');
 const express = require('express');
+const helmet = require('helmet');
 const { pool } = require('./db');
 const { migrate } = require('./migrate');
 const { HttpError } = require('./validators');
+const { logger } = require('./logger');
 
 const PORT = process.env.PORT || 3000;
-const SESSION_TTL_MS = 4 * 60 * 1000;      // 3 min of inactivity + margin for the countdown (HU-004)
+const SESSION_TTL_MS = 3 * 60 * 1000;      // exactly 3 minutes of inactivity (HU-004, RNF-07)
 
 const app = express();
-app.use(express.json());
+// Security headers (RNF-04, OWASP). The pages use inline handlers and Font Awesome from cdnjs.
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrcAttr: ["'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://cdnjs.cloudflare.com'],
+      fontSrc: ["'self'", 'https://cdnjs.cloudflare.com'],
+      imgSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'"],
+      upgradeInsecureRequests: null
+    }
+  }
+}));
+app.use(express.json({ limit: '100kb' }));
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
 // ---------------------------------------------------------------------
@@ -41,7 +58,7 @@ async function log(userId, category, operation) {
     await pool.query('INSERT INTO audit_log (user_id, category, operation) VALUES ($1, $2, $3)',
       [userId, AUDIT_CATEGORIES[category] ? category : 'general', operation]);
   } catch (e) {
-    console.error('Could not write to the audit log:', e.message);
+    logger.error('Could not write to the audit log', { message: e.message, category });
   }
 }
 
@@ -147,7 +164,12 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'Route not found.' }
 app.use((err, req, res, next) => {
   if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON body.' });
-  console.error(err);
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'The request is too large.' });
+  // RNF-23: technical details go to logs/error.log; the user only gets a generic message
+  logger.error('Unhandled error', {
+    method: req.method, url: req.originalUrl.split('?')[0], user: req.user ? req.user.id : null,
+    message: err.message, code: err.code, stack: err.stack
+  });
   res.status(500).json({ error: 'Internal server error.' });
 });
 
@@ -159,6 +181,7 @@ app.use((err, req, res, next) => {
     await pool.query('UPDATE app_user SET session_token = NULL');
     app.listen(PORT, () => console.log(`✔ Liar's Bar running at http://localhost:${PORT}`));
   } catch (err) {
+    logger.error('Could not start the server', { message: err.message, code: err.code });
     console.error('✖ Could not start:', err.message);
     console.error('  Check backend/.env and that PostgreSQL is running (first time: npm run init-db)');
     process.exit(1);

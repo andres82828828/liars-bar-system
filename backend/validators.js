@@ -48,6 +48,22 @@ function validateUser(b = {}) {
   return { fullName, username, password, role, branchId };
 }
 
+// Validation of an edited user (RF-01): name, role and branch. Username and password do not change here.
+function validateUserEdit(b = {}) {
+  const fullName = String(b.fullName ?? '').trim().replace(/\s+/g, ' ');
+  const role = String(b.role ?? '');
+  if (!fullName || !role) throw new HttpError(400, 'Please fill in all required fields.');
+  if (fullName.length < 3 || fullName.length > 100) throw new HttpError(400, 'The full name must be between 3 and 100 characters.');
+  if (!NAME_RE.test(fullName)) throw new HttpError(400, 'The full name can only contain letters, spaces, periods, hyphens and apostrophes.');
+  if (!ROLE_NAMES.includes(role)) throw new HttpError(400, 'Invalid role.');
+  let branchId = null;
+  if (role !== 'Administrator') {
+    branchId = Number(b.branchId);
+    if (!Number.isInteger(branchId) || branchId < 1) throw new HttpError(400, 'Select a branch for this role.');
+  }
+  return { fullName, role, branchId };
+}
+
 // Positive integer id or null
 const toId = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 && v !== '' && v !== null && v !== true ? Number(v) : null);
 
@@ -61,4 +77,4 @@ function parseDate(v, label) {
   return s;
 }
 
-module.exports = { HttpError, validatePassword, validateUser, toId, parseDate };
+module.exports = { HttpError, validatePassword, validateUser, validateUserEdit, toId, parseDate };

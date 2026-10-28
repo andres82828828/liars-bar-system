@@ -306,10 +306,11 @@ body.in-app { background: var(--bg-light); color: var(--ink); }
     border-radius: 14px; padding: 18px 12px; text-align: center; border: 2px solid; display: flex; flex-direction: column;
     align-items: center; gap: 6px; background: #fff; font: inherit; transition: transform .12s, box-shadow .12s;
 }
-.table-card.free { border-color: #bfe0c2; background: #f2faf3; cursor: pointer; color: #1b5e20; }
-.table-card.free:hover { transform: translateY(-3px); box-shadow: 0 8px 18px rgba(46, 125, 50, .15); }
-.table-card.free.sel { border-color: var(--gold); background: #fff8e1; box-shadow: 0 0 0 4px rgba(212, 175, 55, .28); color: #7a5b00; }
+.table-card.available { border-color: #bfe0c2; background: #f2faf3; cursor: pointer; color: #1b5e20; }
+.table-card.available:hover { transform: translateY(-3px); box-shadow: 0 8px 18px rgba(46, 125, 50, .15); }
+.table-card.available.sel { border-color: var(--gold); background: #fff8e1; box-shadow: 0 0 0 4px rgba(212, 175, 55, .28); color: #7a5b00; }
 .table-card.occupied { border-color: #efc3c3; background: #fdf3f3; color: #a12626; }
+.table-card.inactive { border-color: #ddd; background: #f4f4f4; color: #9e9e9e; border-style: dashed; }
 .table-n { font-family: serif; font-size: 2.1rem; line-height: 1; }
 .table-s { font-size: .7rem; text-transform: uppercase; letter-spacing: 1.1px; font-weight: 700; }
 .table-card small { color: #8a5a5a; font-size: .68rem; word-break: break-all; }
