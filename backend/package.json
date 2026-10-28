@@ -1,0 +1,19 @@
+{
+  "name": "liars-bar-backend",
+  "version": "1.0.0",
+  "description": "Liar's Bar Management System API (Node + Express + PostgreSQL)",
+  "main": "server.js",
+  "scripts": {
+    "init-db": "node init-db.js",
+    "migrate": "node migrate.js",
+    "start": "node server.js",
+    "test": "node tests/run-tests.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Management System - Liar's Bar</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%A6%8A%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- =========================================================
+         ACCESS SCREENS (before signing in)
+         ========================================================= -->
+    <div id="auth">
+
+        <!-- LOGIN -->
+        <div id="view-login" class="view active">
+            <div class="login-container">
+                <div class="logo-circle">
+                    <span class="logo-emoji">🦊</span>
+                    <div class="logo-text-circle">LIAR'S BAR • 2026</div>
+                </div>
+
+                <div class="logo-section">
+                    <h1 class="system-title">Management System</h1>
+                    <p class="system-subtitle">Authorized personnel only</p>
+                </div>
+
+                <div class="login-card">
+                    <form id="loginForm">
+                        <div class="input-group">
+                            <label for="userInput">USER</label>
+                            <input type="text" id="userInput" placeholder="Enter your username" autocomplete="off" required>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="passwordInput">PASSWORD</label>
+                            <input type="password" id="passwordInput" placeholder="Enter your password" required>
+                        </div>
+
+                        <button type="submit" id="connectBtn" class="connect-btn disabled" disabled>Connect</button>
+
+                        <div class="forgot-password">
+                            <a href="#" id="linkForgot">Forgot password?</a>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="demo-access-section">
+                    <p>— Demo quick access —</p>
+                    <div class="demo-buttons">
+                        <button type="button" onclick="quickAccess('cmendoza')">Admin</button>
+                        <button type="button" onclick="quickAccess('aperez')">Cashier</button>
+                        <button type="button" onclick="quickAccess('lgarcia')">Waiter</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FORGOT PASSWORD -->
+        <div id="view-change-password" class="view">
+            <div class="login-container">
+                <div class="logo-section">
+                    <h1 class="system-title">Change password</h1>
+                    <p class="system-subtitle">The administrator must authorize the change first</p>
+                </div>
+                <div class="login-card">
+                    <form id="changePasswordForm">
+                        <div class="input-group"><label>USERNAME *</label><input type="text" id="cpUser" placeholder="Your username" autocomplete="off" required></div>
+                        <div class="input-group"><label>NEW PASSWORD *</label><input type="password" id="cpNew" placeholder="New password" autocomplete="new-password" maxlength="64" required></div>
+                        <div class="input-group"><label>CONFIRM NEW PASSWORD *</label><input type="password" id="cpConfirm" placeholder="Repeat the password" autocomplete="new-password" maxlength="64" required></div>
+                        <div class="info-box-dark">
+                            <div class="info-title">Security</div>
+                            <div class="info-desc">Ask the administrator to authorize the change from Users. Then type your username and the new password (8 to 64 characters, one uppercase letter, one number, no spaces). The authorization lasts 30 minutes and can be used only once.</div>
+                        </div>
+                        <button type="submit" class="connect-btn">Change password</button>
+                        <div class="forgot-password"><a href="#" id="cancelChangePass">Cancel</a></div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- ACCOUNT LOCKED -->
+        <div id="view-locked" class="view">
+            <div class="login-container">
+                <div class="top-icon-badge lock-badge">🔒</div>
+                <div class="logo-section">
+                    <h1 class="system-title">Account locked</h1>
+                    <p class="system-subtitle">Too many failed attempts</p>
+                </div>
+                <div class="login-card">
+                    <div class="attempts-header">FAILED ATTEMPTS</div>
+                    <div class="attempts-boxes">
+                        <div class="attempt-box">× 1</div><div class="attempt-box">× 2</div><div class="attempt-box">× 3</div>
+                    </div>
+                    <p class="locked-text">
+                        Your account has been <span class="highlight-red">locked</span> after 3 consecutive failed sign-in attempts. You cannot sign in until an administrator reactivates your access.
+                    </p>
+                    <div class="info-box-dark">
+                        <div class="info-title">What to do?</div>
+                        <div class="info-desc">Contact the system administrator to reactivate your access.</div>
+                    </div>
+                    <button class="connect-btn" id="backFromLock">Back to login</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ACTIVE SESSION -->
+        <div id="view-active-session" class="view">
+            <div class="login-container">
+                <div class="top-icon-badge device-badge">📱</div>
+                <div class="logo-section">
+                    <h1 class="system-title">Active session detected</h1>
+                    <p class="system-subtitle">Active session on another device</p>
+                </div>
+                <div class="login-card">
+                    <p class="session-desc">
+                        The account <strong class="highlight-gold" id="activeUserAccount"></strong> already has an active session on another device or browser.
+                    </p>
+                    <p class="session-footer-text">
+                        For security only one session per account is allowed. If you no longer use the other device
+                        (or closed the browser without signing out), you can <b>close that session</b> and sign in here with the
+                        password you typed. The other device will be disconnected.
+                    </p>
+                    <button class="connect-btn" id="forceLogin">Close the other session and sign in here</button>
+                    <button class="connect-btn" id="backFromActiveSession" style="background:#26231a;color:var(--gold);border:1px solid var(--gold)">Back to login</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- =========================================================
+         APPLICATION (after signing in): menu | content
+         ========================================================= -->
+    <div id="shell" class="shell" hidden>
+        <div class="sidebar-backdrop" id="backdrop"></div>
+
+        <aside class="sidebar" id="sidebar">
+            <div class="brand">
+                <div class="brand-logo">🦊</div>
+                <div><b>Liar's Bar</b><small>Management System</small></div>
+            </div>
+
+            <nav class="nav" id="nav"></nav>
+
+            <div class="sidebar-foot">
+                <div class="user-card">
+                    <div class="avatar" id="userAvatar">?</div>
+                    <div class="user-info"><strong id="userName"></strong><small id="userRole"></small></div>
+                </div>
+                <button class="btn-logout" id="btnOpenLogoutModal">⏻&nbsp; Sign out</button>
+            </div>
+        </aside>
+
+        <div class="main">
+            <header class="topbar">
+                <button class="menu-btn" id="menuBtn" aria-label="Menu">☰</button>
+                <div class="page-head">
+                    <h1 id="pageTitle"></h1>
+                    <p id="pageSub"></p>
+                </div>
+                <div class="topbar-right" id="topbarRight"></div>
+            </header>
+            <main class="content" id="content"></main>
+        </div>
+    </div>
+
+    <!-- MODAL: confirm sign out -->
+    <div class="modal-overlay" id="modalLogout" hidden>
+        <div class="modal">
+            <div class="modal-icon">⏻</div>
+            <h2>Sign out?</h2>
+            <p>You are about to close your session as<br><strong id="logoutUserName"></strong></p>
+            <p class="modal-small">The session will be invalidated and you will need to sign in again.</p>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" id="cancelLogout">Cancel</button>
+                <button class="btn btn-danger" id="confirmLogout">Sign out</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: session about to expire -->
+    <div class="modal-overlay" id="modalTimeout" hidden>
+        <div class="modal">
+            <div class="timer-circle"><span id="timer-text">28s</span></div>
+            <h2>Session about to expire</h2>
+            <p>Your session will expire in <strong id="countdownNumber">28 seconds</strong> due to inactivity. Do you want to continue?</p>
+            <p class="modal-small">Configured inactivity time: <strong>3 minutes</strong></p>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" id="timeoutForceLogout">Sign out</button>
+                <button class="btn" id="timeoutKeepAlive">Stay signed in</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toasts"></div>
+
+    <!-- Page modules first (they only declare functions), then the core that starts the app -->
+    <script src="sorting.js"></script>
+    <script src="js/pages-operations.js"></script>
+    <script src="js/pages-cashier.js"></script>
+    <script src="js/pages-catalog.js"></script>
+    <script src="js/pages-admin.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

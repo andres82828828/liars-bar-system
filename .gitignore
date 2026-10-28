@@ -1,0 +1,11 @@
+# Dependencies
+node_modules/
+
+# Local configuration (database password)
+.env
+
+# Logs and OS files
+npm-debug.log*
+*.log
+.DS_Store
+Thumbs.db
