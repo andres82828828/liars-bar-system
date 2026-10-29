@@ -6,6 +6,7 @@
   "scripts": {
     "init-db": "node init-db.js",
     "migrate": "node migrate.js",
+    "seed-demo": "node seed-demo.js",
     "start": "node server.js",
     "test": "node tests/run-tests.js"
   },

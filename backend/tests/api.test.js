@@ -316,9 +316,9 @@ const tomorrow = () => { const d = new Date(Date.now() + 86400000); return `${d.
   check('security headers (helmet)', head.headers.get('x-content-type-options') === 'nosniff' && !!head.headers.get('content-security-policy'), [...head.headers.keys()]);
   const { pool } = require('../db');
   let blocked = false;
-  try { await pool.query("UPDATE audit_log SET operation = 'tampered' WHERE log_id = 1"); } catch (e) { blocked = /append-only/.test(e.message); }
+  try { await pool.query("UPDATE log_trazabilidad SET operacion = 'tampered' WHERE id_log = 1"); } catch (e) { blocked = /append-only/.test(e.message); }
   let blockedDel = false;
-  try { await pool.query('DELETE FROM audit_log WHERE log_id = 1'); } catch (e) { blockedDel = /append-only/.test(e.message); }
+  try { await pool.query('DELETE FROM log_trazabilidad WHERE id_log = 1'); } catch (e) { blockedDel = /append-only/.test(e.message); }
   check('the database rejects changing or deleting audit records', blocked && blockedDel);
   await pool.end();
   let last;

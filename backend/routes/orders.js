@@ -49,28 +49,28 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
   // Loads an order with its table, branch, products, subtotals, total, payment and invoice
   async function loadOrder(db, id) {
     const o = await db.query(`
-      SELECT o.order_id AS id, o.unique_code AS code, o.created_at AS "createdAt", o.closed_at AS "closedAt", o.status,
-             t.table_id AS "tableId", t.number AS "table", b.branch_id AS "branchId", b.name AS branch, b.address AS "branchAddress"
-        FROM customer_order o
-        JOIN bar_table t ON t.table_id = o.table_id
-        JOIN branch b ON b.branch_id = t.branch_id
-       WHERE o.order_id = $1`, [id]);
+      SELECT o.id_pedido AS id, o.codigo_unico AS code, o.fecha_hora AS "createdAt", o.fecha_cierre AS "closedAt", o.estado AS status,
+             t.id_mesa AS "tableId", t.numero AS "table", b.id_sede AS "branchId", b.nombre AS branch, b.direccion AS "branchAddress"
+        FROM pedido o
+        JOIN mesa t ON t.id_mesa = o.id_mesa
+        JOIN sede b ON b.id_sede = t.id_sede
+       WHERE o.id_pedido = $1`, [id]);
     if (!o.rowCount) return null;
 
     const items = await db.query(`
-      SELECT d.product_id AS "productId", p.code, p.name, d.quantity,
-             d.unit_price::float AS price, (d.quantity * d.unit_price)::float AS subtotal
-        FROM order_detail d JOIN product p ON p.product_id = d.product_id
-       WHERE d.order_id = $1 ORDER BY p.name`, [id]);
+      SELECT d.id_producto AS "productId", p.codigo AS code, p.nombre AS name, d.cantidad AS quantity,
+             d.valor_unitario::float AS price, (d.cantidad * d.valor_unitario)::float AS subtotal
+        FROM detalle_pedido d JOIN producto p ON p.id_producto = d.id_producto
+       WHERE d.id_pedido = $1 ORDER BY p.nombre`, [id]);
 
     const pay = await db.query(`
-      SELECT pa.payment_id AS id, pa.method, pa.status, pa.amount_paid::float AS "amountPaid", pa.amount_received::float AS "amountReceived",
-             pa.change_amount::float AS change, pa.paid_at AS "paidAt", u.full_name AS cashier,
-             i.invoice_id AS "invoiceId", i.issued_at AS "issuedAt"
-        FROM payment pa
-        LEFT JOIN app_user u ON u.user_id = pa.cashier_id
-        LEFT JOIN invoice i ON i.payment_id = pa.payment_id
-       WHERE pa.order_id = $1`, [id]);
+      SELECT pa.id_pago AS id, pa.metodo_pago AS method, pa.estado AS status, pa.valor_pagado::float AS "amountPaid", pa.valor_recibido::float AS "amountReceived",
+             pa.cambio::float AS change, pa.fecha_hora AS "paidAt", u.nombre_completo AS cashier,
+             i.id_factura AS "invoiceId", i.fecha_emision AS "issuedAt"
+        FROM pago pa
+        LEFT JOIN usuario u ON u.id_usuario = pa.id_cajero
+        LEFT JOIN factura i ON i.id_pago = pa.id_pago
+       WHERE pa.id_pedido = $1`, [id]);
 
     const order = o.rows[0];
     order.items = items.rows;
@@ -87,9 +87,9 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
   // A closed or cancelled order cannot be modified any more.
   async function lockOpenOrder(c, user, id) {
     const r = await c.query(`
-      SELECT o.order_id, o.table_id, o.status, o.unique_code, t.branch_id, t.number AS table_number
-        FROM customer_order o JOIN bar_table t ON t.table_id = o.table_id
-       WHERE o.order_id = $1 FOR UPDATE OF o`, [id]);
+      SELECT o.id_pedido AS order_id, o.id_mesa AS table_id, o.estado AS status, o.codigo_unico AS unique_code, t.id_sede AS branch_id, t.numero AS table_number
+        FROM pedido o JOIN mesa t ON t.id_mesa = o.id_mesa
+       WHERE o.id_pedido = $1 FOR UPDATE OF o`, [id]);
     if (!r.rowCount) throw new HttpError(404, 'The order does not exist.');
     const order = r.rows[0];
     if (!canAccessBranch(user, order.branch_id)) throw new HttpError(403, 'That order belongs to another branch.');
@@ -107,17 +107,17 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
     const status = STATUSES.includes(req.query.status) ? req.query.status : null;
 
     const { rows } = await pool.query(`
-      SELECT o.order_id AS id, o.unique_code AS code, o.created_at AS "createdAt", o.status,
-             t.number AS "table", b.name AS branch,
-             COALESCE(SUM(d.quantity), 0)::int AS units,
-             COALESCE(SUM(d.quantity * d.unit_price), 0)::float AS total
-        FROM customer_order o
-        JOIN bar_table t ON t.table_id = o.table_id
-        JOIN branch b ON b.branch_id = t.branch_id
-        LEFT JOIN order_detail d ON d.order_id = o.order_id
-       WHERE ($1::int IS NULL OR t.branch_id = $1) AND ($2::text IS NULL OR o.status = $2)
-       GROUP BY o.order_id, t.number, b.name
-       ORDER BY o.created_at DESC, o.order_id DESC
+      SELECT o.id_pedido AS id, o.codigo_unico AS code, o.fecha_hora AS "createdAt", o.estado AS status,
+             t.numero AS "table", b.nombre AS branch,
+             COALESCE(SUM(d.cantidad), 0)::int AS units,
+             COALESCE(SUM(d.cantidad * d.valor_unitario), 0)::float AS total
+        FROM pedido o
+        JOIN mesa t ON t.id_mesa = o.id_mesa
+        JOIN sede b ON b.id_sede = t.id_sede
+        LEFT JOIN detalle_pedido d ON d.id_pedido = o.id_pedido
+       WHERE ($1::int IS NULL OR t.id_sede = $1) AND ($2::text IS NULL OR o.estado = $2)
+       GROUP BY o.id_pedido, t.numero, b.nombre
+       ORDER BY o.fecha_hora DESC, o.id_pedido DESC
        LIMIT 300`, [branchId, status]);
     res.json(rows);
   }));
@@ -140,9 +140,9 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
       try {
         created = await tx(async (c) => {
           // FOR UPDATE: if two waiters pick the same table, only one wins
-          const t = await c.query(`SELECT t.table_id, t.branch_id, t.number, t.status, b.active AS branch_active
-                                     FROM bar_table t JOIN branch b ON b.branch_id = t.branch_id
-                                    WHERE t.table_id = $1 FOR UPDATE OF t`, [tableId]);
+          const t = await c.query(`SELECT t.id_mesa AS table_id, t.id_sede AS branch_id, t.numero AS number, t.estado AS status, b.activo AS branch_active
+                                     FROM mesa t JOIN sede b ON b.id_sede = t.id_sede
+                                    WHERE t.id_mesa = $1 FOR UPDATE OF t`, [tableId]);
           if (!t.rowCount) throw new HttpError(404, 'The table does not exist.');
           const table = t.rows[0];
           if (!canAccessBranch(req.user, table.branch_id)) throw new HttpError(403, 'That table belongs to another branch.');
@@ -152,13 +152,13 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
 
           const code = newOrderCode();
           const r = await c.query(
-            `INSERT INTO customer_order (table_id, unique_code, status) VALUES ($1, $2, 'open') RETURNING order_id`, [tableId, code]);
-          await c.query(`UPDATE bar_table SET status = 'occupied' WHERE table_id = $1`, [tableId]);
+            `INSERT INTO pedido (id_mesa, codigo_unico, estado) VALUES ($1, $2, 'open') RETURNING id_pedido AS order_id`, [tableId, code]);
+          await c.query(`UPDATE mesa SET estado = 'occupied' WHERE id_mesa = $1`, [tableId]);
           return { id: r.rows[0].order_id, code, table: table.number };
         });
       } catch (e) {
         // Repeated code (almost impossible): retry with another code
-        if (!(e.code === '23505' && /unique_code/.test(e.constraint || ''))) throw e;
+        if (!(e.code === '23505' && /codigo_unico/.test(e.constraint || ''))) throw e;
       }
     }
     if (!created) throw new HttpError(500, 'Could not generate a unique code. Please try again.');
@@ -179,9 +179,9 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
       const order = await lockOpenOrder(c, req.user, id);
 
       const inv = await c.query(`
-        SELECT pb.quantity, pb.is_active, p.sale_price, p.purchase_price, p.name
-          FROM product_branch pb JOIN product p ON p.product_id = pb.product_id
-         WHERE pb.branch_id = $1 AND pb.product_id = $2 FOR UPDATE OF pb`, [order.branch_id, productId]);
+        SELECT pb.cantidad_disponible AS quantity, pb.estado_disponibilidad AS is_active, p.valor_venta AS sale_price, p.valor_compra AS purchase_price, p.nombre AS name
+          FROM producto_sede pb JOIN producto p ON p.id_producto = pb.id_producto
+         WHERE pb.id_sede = $1 AND pb.id_producto = $2 FOR UPDATE OF pb`, [order.branch_id, productId]);
 
       // Check availability in the order's branch (HU-020)
       if (!inv.rowCount) throw new HttpError(409, 'That product is not offered in this branch.');
@@ -192,14 +192,14 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
 
       // If the product was already in the order, the quantity is added (keeps the price it was added with)
       await c.query(`
-        INSERT INTO order_detail (order_id, product_id, quantity, unit_price, unit_cost)
+        INSERT INTO detalle_pedido (id_pedido, id_producto, cantidad, valor_unitario, costo_unitario)
         VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (order_id, product_id) DO UPDATE SET quantity = order_detail.quantity + EXCLUDED.quantity`,
+        ON CONFLICT (id_pedido, id_producto) DO UPDATE SET cantidad = detalle_pedido.cantidad + EXCLUDED.cantidad`,
         [id, productId, quantity, p.sale_price, p.purchase_price]);
 
       // Takes the units out of the inventory. At 0 the product is "out of stock" (leaves the catalog)
       // but stays ACTIVE: after a new stock entry it is sold again without reactivating it.
-      await c.query('UPDATE product_branch SET quantity = quantity - $3 WHERE branch_id = $1 AND product_id = $2',
+      await c.query('UPDATE producto_sede SET cantidad_disponible = cantidad_disponible - $3 WHERE id_sede = $1 AND id_producto = $2',
         [order.branch_id, productId, quantity]);
 
       return { order: await loadOrder(c, id), name: p.name };
@@ -224,18 +224,18 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
     const result = await tx(async (c) => {
       const order = await lockOpenOrder(c, req.user, id);
       const line = await c.query(`
-        SELECT d.quantity, p.name FROM order_detail d JOIN product p ON p.product_id = d.product_id
-         WHERE d.order_id = $1 AND d.product_id = $2 FOR UPDATE OF d`, [id, productId]);
+        SELECT d.cantidad AS quantity, p.nombre AS name FROM detalle_pedido d JOIN producto p ON p.id_producto = d.id_producto
+         WHERE d.id_pedido = $1 AND d.id_producto = $2 FOR UPDATE OF d`, [id, productId]);
       if (!line.rowCount) throw new HttpError(404, 'That product is not in the order.');
       const { quantity: inOrder, name } = line.rows[0];
       const remove = body.quantity === undefined ? inOrder : body.quantity;
       if (remove > inOrder) throw new HttpError(400, `The order only has ${inOrder} unit(s) of "${name}".`);
 
-      if (remove === inOrder) await c.query('DELETE FROM order_detail WHERE order_id = $1 AND product_id = $2', [id, productId]);
-      else await c.query('UPDATE order_detail SET quantity = quantity - $3 WHERE order_id = $1 AND product_id = $2', [id, productId, remove]);
+      if (remove === inOrder) await c.query('DELETE FROM detalle_pedido WHERE id_pedido = $1 AND id_producto = $2', [id, productId]);
+      else await c.query('UPDATE detalle_pedido SET cantidad = cantidad - $3 WHERE id_pedido = $1 AND id_producto = $2', [id, productId, remove]);
 
       // The units go back to the branch inventory
-      await c.query('UPDATE product_branch SET quantity = quantity + $3 WHERE branch_id = $1 AND product_id = $2',
+      await c.query('UPDATE producto_sede SET cantidad_disponible = cantidad_disponible + $3 WHERE id_sede = $1 AND id_producto = $2',
         [order.branch_id, productId, remove]);
 
       return { order: await loadOrder(c, id), name, remove };
@@ -253,10 +253,10 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
     const id = Number(req.params.id);
     const code = await tx(async (c) => {
       const order = await lockOpenOrder(c, req.user, id);
-      const n = await c.query('SELECT COUNT(*)::int AS n FROM order_detail WHERE order_id = $1', [id]);
+      const n = await c.query('SELECT COUNT(*)::int AS n FROM detalle_pedido WHERE id_pedido = $1', [id]);
       if (n.rows[0].n > 0) throw new HttpError(409, 'It cannot be cancelled: the order has products. Remove them first (they go back to the inventory).');
-      await c.query(`UPDATE customer_order SET status = 'cancelled', closed_at = NOW() WHERE order_id = $1`, [id]);
-      await c.query(`UPDATE bar_table SET status = 'available' WHERE table_id = $1`, [order.table_id]);
+      await c.query(`UPDATE pedido SET estado = 'cancelled', fecha_cierre = NOW() WHERE id_pedido = $1`, [id]);
+      await c.query(`UPDATE mesa SET estado = 'available' WHERE id_mesa = $1`, [order.table_id]);
       return order.unique_code;
     });
     await log(req.user.id, 'orders', `Cancelled empty order ${code}`);
@@ -280,23 +280,23 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
     const result = await tx(async (c) => {
       const order = await lockOpenOrder(c, req.user, id);
 
-      const t = await c.query('SELECT COALESCE(SUM(quantity * unit_price), 0) AS total FROM order_detail WHERE order_id = $1', [id]);
+      const t = await c.query('SELECT COALESCE(SUM(cantidad * valor_unitario), 0) AS total FROM detalle_pedido WHERE id_pedido = $1', [id]);
       const totalC = toCents(t.rows[0].total);
       if (totalC <= 0) throw new HttpError(409, 'The order has no products: there is nothing to charge.');
 
       const { receivedC, changeC } = deferred ? { receivedC: null, changeC: 0 } : checkAmount(method, amountReceived, totalC);
 
       const pay = await c.query(`
-        INSERT INTO payment (order_id, cashier_id, amount_paid, amount_received, method, change_amount, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING payment_id`,
+        INSERT INTO pago (id_pedido, id_cajero, valor_pagado, valor_recibido, metodo_pago, cambio, estado)
+        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id_pago AS payment_id`,
         [id, req.user.id, totalC / 100, receivedC === null ? null : receivedC / 100, method, changeC / 100, deferred ? 'pending' : 'paid']);
       const paymentId = pay.rows[0].payment_id;
 
-      await c.query(`UPDATE customer_order SET status = 'closed', closed_at = NOW() WHERE order_id = $1`, [id]);
-      await c.query(`UPDATE bar_table SET status = 'available' WHERE table_id = $1`, [order.table_id]);
-      const inv = await c.query('INSERT INTO invoice (order_id, payment_id) VALUES ($1, $2) RETURNING invoice_id', [id, paymentId]);
+      await c.query(`UPDATE pedido SET estado = 'closed', fecha_cierre = NOW() WHERE id_pedido = $1`, [id]);
+      await c.query(`UPDATE mesa SET estado = 'available' WHERE id_mesa = $1`, [order.table_id]);
+      const inv = await c.query('INSERT INTO factura (id_pedido, id_pago) VALUES ($1, $2) RETURNING id_factura AS invoice_id', [id, paymentId]);
       // Invoice lines (invoice_detail): copy of the order lines at the moment of invoicing
-      await c.query('INSERT INTO invoice_detail (invoice_id, product_id, quantity, unit_price) SELECT $1, product_id, quantity, unit_price FROM order_detail WHERE order_id = $2', [inv.rows[0].invoice_id, id]);
+      await c.query('INSERT INTO detalle_factura (id_factura, id_producto, cantidad, valor_unitario) SELECT $1, id_producto AS product_id, cantidad AS quantity, valor_unitario AS unit_price FROM detalle_pedido WHERE id_pedido = $2', [inv.rows[0].invoice_id, id]);
 
       return {
         paymentId, invoiceId: inv.rows[0].invoice_id, invoiceNumber: invoiceNumber(inv.rows[0].invoice_id),
@@ -322,15 +322,15 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
     const branchId = all ? null : branchOf(req.user, req.query.branch_id);
     if (!all && !branchId) return res.json([]);
     const { rows } = await pool.query(`
-      SELECT pa.payment_id AS id, pa.amount_paid::float AS total, pa.paid_at AS "deferredAt",
-             o.order_id AS "orderId", o.unique_code AS "orderCode", t.number AS "table", b.name AS branch, i.invoice_id AS "invoiceId"
-        FROM payment pa
-        JOIN customer_order o ON o.order_id = pa.order_id
-        JOIN bar_table t ON t.table_id = o.table_id
-        JOIN branch b ON b.branch_id = t.branch_id
-        LEFT JOIN invoice i ON i.payment_id = pa.payment_id
-       WHERE pa.status = 'pending' AND ($1::int IS NULL OR t.branch_id = $1)
-       ORDER BY pa.paid_at`, [branchId]);
+      SELECT pa.id_pago AS id, pa.valor_pagado::float AS total, pa.fecha_hora AS "deferredAt",
+             o.id_pedido AS "orderId", o.codigo_unico AS "orderCode", t.numero AS "table", b.nombre AS branch, i.id_factura AS "invoiceId"
+        FROM pago pa
+        JOIN pedido o ON o.id_pedido = pa.id_pedido
+        JOIN mesa t ON t.id_mesa = o.id_mesa
+        JOIN sede b ON b.id_sede = t.id_sede
+        LEFT JOIN factura i ON i.id_pago = pa.id_pago
+       WHERE pa.estado = 'pending' AND ($1::int IS NULL OR t.id_sede = $1)
+       ORDER BY pa.fecha_hora`, [branchId]);
     res.json(rows.map((x) => ({ ...x, invoiceNumber: x.invoiceId ? invoiceNumber(x.invoiceId) : null })));
   }));
 
@@ -342,17 +342,17 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
 
     const result = await tx(async (c) => {
       const r = await c.query(`
-        SELECT pa.payment_id, pa.amount_paid, pa.status, o.unique_code, t.branch_id
-          FROM payment pa JOIN customer_order o ON o.order_id = pa.order_id JOIN bar_table t ON t.table_id = o.table_id
-         WHERE pa.payment_id = $1 FOR UPDATE OF pa`, [id]);
+        SELECT pa.id_pago AS payment_id, pa.valor_pagado AS amount_paid, pa.estado AS status, o.codigo_unico AS unique_code, t.id_sede AS branch_id
+          FROM pago pa JOIN pedido o ON o.id_pedido = pa.id_pedido JOIN mesa t ON t.id_mesa = o.id_mesa
+         WHERE pa.id_pago = $1 FOR UPDATE OF pa`, [id]);
       if (!r.rowCount) throw new HttpError(404, 'The payment does not exist.');
       const p = r.rows[0];
       if (!canAccessBranch(req.user, p.branch_id)) throw new HttpError(403, 'That payment belongs to another branch.');
       if (p.status !== 'pending') throw new HttpError(409, 'This payment was already collected.');
       const totalC = toCents(p.amount_paid);
       const { receivedC, changeC } = checkAmount(method, amountReceived, totalC);
-      await c.query(`UPDATE payment SET method = $1, amount_received = $2, change_amount = $3, status = 'paid',
-                            paid_at = NOW(), cashier_id = $4 WHERE payment_id = $5`,
+      await c.query(`UPDATE pago SET metodo_pago = $1, valor_recibido = $2, cambio = $3, estado = 'paid',
+                            fecha_hora = NOW(), id_cajero = $4 WHERE id_pago = $5`,
         [method, receivedC / 100, changeC / 100, req.user.id, id]);
       return { code: p.unique_code, total: totalC / 100, received: receivedC / 100, change: changeC / 100 };
     });

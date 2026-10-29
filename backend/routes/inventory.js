@@ -17,8 +17,8 @@ module.exports = ({ app, pool, auth, allow, adminOnly, log, wrap, HttpError, bra
   // Checks that the branch and the product exist and returns their names (for messages and the log)
   async function branchAndProduct(branchId, productId) {
     const r = await pool.query(`
-      SELECT (SELECT name FROM branch WHERE branch_id = $1)   AS branch,
-             (SELECT name FROM product WHERE product_id = $2) AS product`, [branchId, productId]);
+      SELECT (SELECT nombre AS name FROM sede WHERE id_sede = $1)   AS branch,
+             (SELECT nombre AS name FROM producto WHERE id_producto = $2) AS product`, [branchId, productId]);
     const { branch, product } = r.rows[0];
     if (!branch) throw new HttpError(404, 'The selected branch does not exist.');
     if (!product) throw new HttpError(404, 'The selected product does not exist.');
@@ -31,14 +31,14 @@ module.exports = ({ app, pool, auth, allow, adminOnly, log, wrap, HttpError, bra
     const branchId = branchOf(req.user, req.query.branch_id);
     if (!branchId) return res.json([]);
     const { rows } = await pool.query(`
-      SELECT p.product_id AS id, p.code, p.name, t.name AS type,
-             (pb.product_id IS NOT NULL) AS assigned,
-             COALESCE(pb.quantity, 0) AS quantity,
-             COALESCE(pb.is_active, FALSE) AS active
-        FROM product p
-        JOIN product_type t ON t.type_id = p.type_id
-        LEFT JOIN product_branch pb ON pb.product_id = p.product_id AND pb.branch_id = $1
-       ORDER BY p.name`, [branchId]);
+      SELECT p.id_producto AS id, p.codigo AS code, p.nombre AS name, t.nombre AS type,
+             (pb.id_producto IS NOT NULL) AS assigned,
+             COALESCE(pb.cantidad_disponible, 0) AS quantity,
+             COALESCE(pb.estado_disponibilidad, FALSE) AS active
+        FROM producto p
+        JOIN tipo_producto t ON t.id_tipo = p.id_tipo
+        LEFT JOIN producto_sede pb ON pb.id_producto = p.id_producto AND pb.id_sede = $1
+       ORDER BY p.nombre`, [branchId]);
     res.json(rows);
   }));
 
@@ -57,7 +57,7 @@ module.exports = ({ app, pool, auth, allow, adminOnly, log, wrap, HttpError, bra
 
     const { branch, product } = await branchAndProduct(branchId, productId);
     const current = await pool.query(
-      'SELECT quantity FROM product_branch WHERE branch_id = $1 AND product_id = $2', [branchId, productId]);
+      'SELECT cantidad_disponible AS quantity FROM producto_sede WHERE id_sede = $1 AND id_producto = $2', [branchId, productId]);
     const has = current.rowCount ? current.rows[0].quantity : 0;
     if (has + quantity > MAX_STOCK) {
       throw new HttpError(400, `A product cannot exceed ${MAX_STOCK} units per branch (there are ${has}).`);
@@ -65,11 +65,11 @@ module.exports = ({ app, pool, auth, allow, adminOnly, log, wrap, HttpError, bra
 
     try {
       const r = await pool.query(`
-        INSERT INTO product_branch (branch_id, product_id, quantity, is_active)
+        INSERT INTO producto_sede (id_sede, id_producto, cantidad_disponible, estado_disponibilidad)
         VALUES ($1, $2, $3, TRUE)
-        ON CONFLICT (branch_id, product_id) DO UPDATE
-           SET quantity = product_branch.quantity + EXCLUDED.quantity
-        RETURNING quantity, is_active`, [branchId, productId, quantity]);
+        ON CONFLICT (id_sede, id_producto) DO UPDATE
+           SET cantidad_disponible = producto_sede.cantidad_disponible + EXCLUDED.cantidad_disponible
+        RETURNING cantidad_disponible AS quantity, estado_disponibilidad AS is_active`, [branchId, productId, quantity]);
       await log(req.user.id, 'inventory', `Stock entry: +${quantity} of "${product}" in branch "${branch}"`);
       res.status(201).json({ quantity: r.rows[0].quantity, active: r.rows[0].is_active });
     } catch (e) {
@@ -91,10 +91,10 @@ module.exports = ({ app, pool, auth, allow, adminOnly, log, wrap, HttpError, bra
 
     const { branch, product } = await branchAndProduct(branchId, productId);
     const r = await pool.query(`
-      INSERT INTO product_branch (branch_id, product_id, quantity, is_active)
+      INSERT INTO producto_sede (id_sede, id_producto, cantidad_disponible, estado_disponibilidad)
       VALUES ($1, $2, 0, $3)
-      ON CONFLICT (branch_id, product_id) DO UPDATE SET is_active = EXCLUDED.is_active
-      RETURNING quantity`, [branchId, productId, active]);
+      ON CONFLICT (id_sede, id_producto) DO UPDATE SET estado_disponibilidad = EXCLUDED.estado_disponibilidad
+      RETURNING cantidad_disponible AS quantity`, [branchId, productId, active]);
 
     await log(req.user.id, 'inventory', `${active ? 'Activated' : 'Deactivated'} product "${product}" in branch "${branch}"`);
     res.json({ ok: true, active, quantity: r.rows[0].quantity });
@@ -105,13 +105,13 @@ module.exports = ({ app, pool, auth, allow, adminOnly, log, wrap, HttpError, bra
     const branchId = branchOf(req.user, req.query.branch_id);
     if (!branchId) return res.json([]);
     const { rows } = await pool.query(`
-      SELECT p.product_id AS id, p.code, p.name, t.name AS type,
-             p.sale_price::float AS price, pb.quantity
-        FROM product_branch pb
-        JOIN product p ON p.product_id = pb.product_id
-        JOIN product_type t ON t.type_id = p.type_id
-       WHERE pb.branch_id = $1 AND pb.is_active = TRUE AND pb.quantity > 0
-       ORDER BY t.name, p.name`, [branchId]);
+      SELECT p.id_producto AS id, p.codigo AS code, p.nombre AS name, t.nombre AS type,
+             p.valor_venta::float AS price, pb.cantidad_disponible AS quantity
+        FROM producto_sede pb
+        JOIN producto p ON p.id_producto = pb.id_producto
+        JOIN tipo_producto t ON t.id_tipo = p.id_tipo
+       WHERE pb.id_sede = $1 AND pb.estado_disponibilidad = TRUE AND pb.cantidad_disponible > 0
+       ORDER BY t.nombre, p.nombre`, [branchId]);
     res.json(rows);
   }));
 };

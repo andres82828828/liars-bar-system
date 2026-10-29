@@ -42,7 +42,10 @@ module.exports = ({ app, pool, auth, log, wrap, HttpError, sessions, replaced, s
     if (ipBlocked(req.ip)) return res.status(429).json(TOO_MANY);
 
     const { rows } = await pool.query(
-      `SELECT u.*, b.active AS branch_active FROM app_user u LEFT JOIN branch b ON b.branch_id = u.branch_id
+      `SELECT u.id_usuario AS user_id, u.id_sede AS branch_id, u.username, u.password_hash, u.nombre_completo AS full_name,
+              u.rol AS role, u.activo AS active, u.intentos_fallidos AS failed_attempts, u.token_sesion AS session_token,
+              b.activo AS branch_active
+         FROM usuario u LEFT JOIN sede b ON b.id_sede = u.id_sede
         WHERE u.username = $1`, [String(username).trim()]);
     const u = rows[0];
     const ok = await bcrypt.compare(String(password), u ? u.password_hash : DUMMY_HASH);
@@ -57,7 +60,7 @@ module.exports = ({ app, pool, auth, log, wrap, HttpError, sessions, replaced, s
     if (!ok) {
       ipFailed(req.ip);
       const r = await pool.query(
-        'UPDATE app_user SET failed_attempts = failed_attempts + 1 WHERE user_id = $1 RETURNING failed_attempts', [u.user_id]);
+        'UPDATE usuario SET intentos_fallidos = intentos_fallidos + 1 WHERE id_usuario = $1 RETURNING intentos_fallidos AS failed_attempts', [u.user_id]);
       const attempts = r.rows[0].failed_attempts;
       await log(u.user_id, 'auth', `Failed login attempt (${attempts}/${MAX_ATTEMPTS})`);
       if (attempts >= MAX_ATTEMPTS) {
@@ -88,7 +91,7 @@ module.exports = ({ app, pool, auth, log, wrap, HttpError, sessions, replaced, s
     for (const [t, ts] of replaced) if (Date.now() - ts > 3600000) replaced.delete(t);   // cleanup (1 h)
 
     const token = crypto.randomBytes(32).toString('hex');
-    await pool.query('UPDATE app_user SET failed_attempts = 0, session_token = $1 WHERE user_id = $2', [token, u.user_id]);
+    await pool.query('UPDATE usuario SET intentos_fallidos = 0, token_sesion = $1 WHERE id_usuario = $2', [token, u.user_id]);
 
     const user = { id: u.user_id, username: u.username, name: u.full_name, role: u.role, branchId: u.branch_id };
     sessions.set(token, { user, lastSeen: Date.now() });
@@ -105,8 +108,8 @@ module.exports = ({ app, pool, auth, log, wrap, HttpError, sessions, replaced, s
     if (ipBlocked(req.ip)) return res.status(429).json(TOO_MANY);
 
     const { rows } = await pool.query(
-      `SELECT user_id, full_name, active, (reset_authorized_until IS NOT NULL AND reset_authorized_until > NOW()) AS authorized
-         FROM app_user WHERE username = $1`, [String(username).trim()]);
+      `SELECT id_usuario AS user_id, nombre_completo AS full_name, activo AS active, (reset_autorizado_hasta IS NOT NULL AND reset_autorizado_hasta > NOW()) AS authorized
+         FROM usuario WHERE username = $1`, [String(username).trim()]);
     const u = rows[0];
     // Same generic answer if the username does not exist or the name does not match it
     if (!u || normName(u.full_name) !== normName(fullName)) {
@@ -121,8 +124,8 @@ module.exports = ({ app, pool, auth, log, wrap, HttpError, sessions, replaced, s
 
     // New hash, account unlocked, authorization used up and open sessions closed
     await pool.query(
-      `UPDATE app_user SET password_hash = $1, failed_attempts = 0, session_token = NULL, reset_authorized_until = NULL
-        WHERE user_id = $2`, [await bcrypt.hash(newPassword, 10), u.user_id]);
+      `UPDATE usuario SET password_hash = $1, intentos_fallidos = 0, token_sesion = NULL, reset_autorizado_hasta = NULL
+        WHERE id_usuario = $2`, [await bcrypt.hash(newPassword, 10), u.user_id]);
     closeUserSessions(u.user_id);
     await log(u.user_id, 'auth', 'Changed their password with administrator authorization');
     res.json({ ok: true });
@@ -134,7 +137,7 @@ module.exports = ({ app, pool, auth, log, wrap, HttpError, sessions, replaced, s
 
   app.post('/api/logout', auth, wrap(async (req, res) => {
     sessions.delete(req.token);
-    await pool.query('UPDATE app_user SET session_token = NULL WHERE user_id = $1', [req.user.id]);
+    await pool.query('UPDATE usuario SET token_sesion = NULL WHERE id_usuario = $1', [req.user.id]);
     await log(req.user.id, 'auth', 'Signed out');
     res.json({ ok: true });
   }));

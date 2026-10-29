@@ -36,9 +36,23 @@ Demo users: `cmendoza / Admin123*` (Administrator), `aperez / Cajero123*` (Cashi
 > `npm run init-db` drops and recreates every table. Use it to start from scratch, not when you
 > have data you want to keep. For daily use just run `npm start`.
 
-### Upgrading a database created with the Spanish version
-`npm start` detects the old Spanish tables (`sede`, `mesa`, `pedido`…) and renames tables, columns and
-status values to English **without losing data**, in a single transaction (all or nothing).
+### Demo data (optional)
+`npm run seed-demo` fills the database to try the system with realistic volume: 8 tables per branch, more
+cashiers and waiters (`dsuarez`, `vcastro` / `Cajero123*` · `jrodriguez`, `mtorres`, `kmorales`, `sramirez`, `fortiz` /
+`Mesero123*`), 27 products with stock, ~45 days of sales (closed orders with payment, invoice and invoice lines,
+a few deferred payments pending) and some open orders. It only adds data, and running it again does nothing
+(`npm run seed-demo -- --force` adds another batch of sales).
+
+### Database names
+Tables and columns use the Spanish names of the entity-relationship model: `sede`, `mesa`, `usuario`,
+`log_trazabilidad`, `proveedor`, `tipo_producto`, `producto`, `producto_sede`, `pedido`, `detalle_pedido`,
+`pago`, `factura` and `detalle_factura` (columns such as `id_sede`, `codigo_unico`, `cantidad_disponible`,
+`valor_unitario`…). Status, role and payment method values are stored as codes (`open`, `Cashier`, `cash`…).
+
+### Upgrading an older database
+`npm start` detects older schemas and brings them up to date **without losing data**, in a single
+transaction (all or nothing): the English tables of the intermediate versions (`branch`, `bar_table`,
+`customer_order`…) and the first Spanish version are renamed to the current names.
 You can also run it by hand with `npm run migrate`. Running it again does nothing.
 
 ## Roles

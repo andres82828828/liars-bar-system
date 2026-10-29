@@ -13,16 +13,16 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
 
   // Builds the full invoice: business, branch, order, products and quantities, total and payment
   async function buildInvoice(db, invoiceId) {
-    const r = await db.query('SELECT invoice_id, order_id, issued_at FROM invoice WHERE invoice_id = $1', [invoiceId]);
+    const r = await db.query('SELECT id_factura AS invoice_id, id_pedido AS order_id, fecha_emision AS issued_at FROM factura WHERE id_factura = $1', [invoiceId]);
     if (!r.rowCount) return null;
     const inv = r.rows[0];
     const order = await loadOrder(db, inv.order_id);
     // Lines come from invoice_detail (what was billed), not from the live order
     const lines = (await db.query(`
-      SELECT d.product_id AS "productId", p.code, p.name, d.quantity,
-             d.unit_price::float AS price, (d.quantity * d.unit_price)::float AS subtotal
-        FROM invoice_detail d JOIN product p ON p.product_id = d.product_id
-       WHERE d.invoice_id = $1 ORDER BY p.name`, [invoiceId])).rows;
+      SELECT d.id_producto AS "productId", p.codigo AS code, p.nombre AS name, d.cantidad AS quantity,
+             d.valor_unitario::float AS price, (d.cantidad * d.valor_unitario)::float AS subtotal
+        FROM detalle_factura d JOIN producto p ON p.id_producto = d.id_producto
+       WHERE d.id_factura = $1 ORDER BY p.nombre`, [invoiceId])).rows;
     const items = lines;
     return {
       id: inv.invoice_id,
@@ -47,17 +47,17 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
     const to = parseDate(req.query.to, 'end');
 
     const { rows } = await pool.query(`
-      SELECT i.invoice_id AS id, i.issued_at AS "issuedAt", o.order_id AS "orderId", o.unique_code AS "orderCode",
-             t.number AS "table", b.name AS branch, pa.method, pa.amount_paid::float AS total
-        FROM invoice i
-        JOIN customer_order o ON o.order_id = i.order_id
-        JOIN bar_table t ON t.table_id = o.table_id
-        JOIN branch b ON b.branch_id = t.branch_id
-        JOIN payment pa ON pa.payment_id = i.payment_id
-       WHERE ($1::int IS NULL OR t.branch_id = $1)
-         AND ($2::date IS NULL OR i.issued_at >= $2::date)
-         AND ($3::date IS NULL OR i.issued_at < $3::date + 1)
-       ORDER BY i.issued_at DESC, i.invoice_id DESC
+      SELECT i.id_factura AS id, i.fecha_emision AS "issuedAt", o.id_pedido AS "orderId", o.codigo_unico AS "orderCode",
+             t.numero AS "table", b.nombre AS branch, pa.metodo_pago AS method, pa.valor_pagado::float AS total
+        FROM factura i
+        JOIN pedido o ON o.id_pedido = i.id_pedido
+        JOIN mesa t ON t.id_mesa = o.id_mesa
+        JOIN sede b ON b.id_sede = t.id_sede
+        JOIN pago pa ON pa.id_pago = i.id_pago
+       WHERE ($1::int IS NULL OR t.id_sede = $1)
+         AND ($2::date IS NULL OR i.fecha_emision >= $2::date)
+         AND ($3::date IS NULL OR i.fecha_emision < $3::date + 1)
+       ORDER BY i.fecha_emision DESC, i.id_factura DESC
        LIMIT 500`, [branchId, from, to]);
     res.json(rows.map((x) => ({ ...x, number: invoiceNumber(x.id) })));
   }));
@@ -74,12 +74,12 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
     const orderId = Number(req.params.id);
     const out = await tx(async (c) => {
       const o = await c.query(`
-        SELECT o.order_id, o.unique_code, o.status, t.branch_id, pa.payment_id, i.invoice_id
-          FROM customer_order o
-          JOIN bar_table t ON t.table_id = o.table_id
-          LEFT JOIN payment pa ON pa.order_id = o.order_id
-          LEFT JOIN invoice i ON i.order_id = o.order_id
-         WHERE o.order_id = $1 FOR UPDATE OF o`, [orderId]);
+        SELECT o.id_pedido AS order_id, o.codigo_unico AS unique_code, o.estado AS status, t.id_sede AS branch_id, pa.id_pago AS payment_id, i.id_factura AS invoice_id
+          FROM pedido o
+          JOIN mesa t ON t.id_mesa = o.id_mesa
+          LEFT JOIN pago pa ON pa.id_pedido = o.id_pedido
+          LEFT JOIN factura i ON i.id_pedido = o.id_pedido
+         WHERE o.id_pedido = $1 FOR UPDATE OF o`, [orderId]);
       if (!o.rowCount) throw new HttpError(404, 'The order does not exist.');
       const order = o.rows[0];
       if (!canAccessBranch(req.user, order.branch_id)) throw new HttpError(403, 'That order belongs to another branch.');
@@ -87,8 +87,8 @@ module.exports = ({ app, pool, auth, allow, log, wrap, tx, HttpError, branchOf, 
         throw new HttpError(409, 'Only paid (closed) orders can be invoiced.');
       }
       if (order.invoice_id) return { id: order.invoice_id, created: false, code: order.unique_code };
-      const r = await c.query('INSERT INTO invoice (order_id, payment_id) VALUES ($1, $2) RETURNING invoice_id', [orderId, order.payment_id]);
-      await c.query('INSERT INTO invoice_detail (invoice_id, product_id, quantity, unit_price) SELECT $1, product_id, quantity, unit_price FROM order_detail WHERE order_id = $2', [r.rows[0].invoice_id, orderId]);
+      const r = await c.query('INSERT INTO factura (id_pedido, id_pago) VALUES ($1, $2) RETURNING id_factura AS invoice_id', [orderId, order.payment_id]);
+      await c.query('INSERT INTO detalle_factura (id_factura, id_producto, cantidad, valor_unitario) SELECT $1, id_producto AS product_id, cantidad AS quantity, valor_unitario AS unit_price FROM detalle_pedido WHERE id_pedido = $2', [r.rows[0].invoice_id, orderId]);
       return { id: r.rows[0].invoice_id, created: true, code: order.unique_code };
     });
 

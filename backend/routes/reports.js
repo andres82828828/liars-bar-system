@@ -14,8 +14,8 @@ module.exports = ({ app, pool, auth, allow, log, wrap, HttpError, ROLES }) => {
   const METHOD_NAMES = { cash: 'Cash', credit_card: 'Credit card', debit_card: 'Debit card', deferred: 'Deferred (pending)' };
   // Which date the period applies to (whitelisted column, never taken from the request as SQL)
   const DATE_BY = {
-    order:   { col: 'o.created_at', label: 'Order date (taken)' },
-    payment: { col: 'pa.paid_at',   label: 'Payment date' }
+    order:   { col: 'o.fecha_hora', label: 'Order date (taken)' },
+    payment: { col: 'pa.fecha_hora', label: 'Payment date' }
   };
   const cents = (n) => Math.round(Number(n) * 100);
   const round2 = (n) => Math.round(Number(n) * 100) / 100;
@@ -38,7 +38,7 @@ module.exports = ({ app, pool, auth, allow, log, wrap, HttpError, ROLES }) => {
     let branch = null;
     if (requested && requested !== 'all') {
       const id = Number(requested);
-      const r = Number.isInteger(id) ? await pool.query('SELECT branch_id AS id, name FROM branch WHERE branch_id = $1', [id]) : { rowCount: 0 };
+      const r = Number.isInteger(id) ? await pool.query('SELECT id_sede AS id, nombre AS name FROM sede WHERE id_sede = $1', [id]) : { rowCount: 0 };
       if (!r.rowCount) throw new HttpError(400, 'The selected branch does not exist.');
       branch = r.rows[0];
     }
@@ -47,16 +47,16 @@ module.exports = ({ app, pool, auth, allow, log, wrap, HttpError, ROLES }) => {
 
   // Sales query: every product line of the closed orders in the period
   const salesFrom = (dateBy) => `
-      FROM customer_order o
-      JOIN payment pa      ON pa.order_id = o.order_id
-      JOIN bar_table t     ON t.table_id = o.table_id
-      JOIN branch b        ON b.branch_id = t.branch_id
-      JOIN order_detail d  ON d.order_id = o.order_id
-      JOIN product p       ON p.product_id = d.product_id
-      JOIN product_type ty ON ty.type_id = p.type_id
-     WHERE o.status = 'closed'
+      FROM pedido o
+      JOIN pago pa            ON pa.id_pedido = o.id_pedido
+      JOIN mesa t             ON t.id_mesa = o.id_mesa
+      JOIN sede b             ON b.id_sede = t.id_sede
+      JOIN detalle_pedido d   ON d.id_pedido = o.id_pedido
+      JOIN producto p         ON p.id_producto = d.id_producto
+      JOIN tipo_producto ty   ON ty.id_tipo = p.id_tipo
+     WHERE o.estado = 'closed'
        AND ${DATE_BY[dateBy].col} >= $1::date AND ${DATE_BY[dateBy].col} < $2::date + 1
-       AND ($3::int IS NULL OR b.branch_id = $3)`;
+       AND ($3::int IS NULL OR b.id_sede = $3)`;
 
   async function salesReport(f) {
     const params = [f.from, f.to, f.branch ? f.branch.id : null];
@@ -65,24 +65,24 @@ module.exports = ({ app, pool, auth, allow, log, wrap, HttpError, ROLES }) => {
     // One row per day, branch, product and frozen price: shows the date and the unit purchase / sale value
     const dayCol = DATE_BY[f.dateBy].col;
     const byProduct = (await pool.query(`
-      SELECT (${dayCol})::date::text AS day, b.name AS branch, p.code, p.name AS product, ty.name AS type,
-             d.unit_cost::float AS "unitCost", d.unit_price::float AS "unitPrice",
-             SUM(d.quantity)::int AS units,
-             SUM(d.quantity * d.unit_price)::float AS revenue,
-             SUM(d.quantity * d.unit_cost)::float AS cost
+      SELECT (${dayCol})::date::text AS day, b.nombre AS branch, p.codigo AS code, p.nombre AS product, ty.nombre AS type,
+             d.costo_unitario::float AS "unitCost", d.valor_unitario::float AS "unitPrice",
+             SUM(d.cantidad)::int AS units,
+             SUM(d.cantidad * d.valor_unitario)::float AS revenue,
+             SUM(d.cantidad * d.costo_unitario)::float AS cost
       ${SALES_FROM}
-      GROUP BY (${dayCol})::date, b.name, p.product_id, p.code, p.name, ty.name, d.unit_cost, d.unit_price
-      ORDER BY day, b.name, revenue DESC, p.code`, params)).rows;
+      GROUP BY (${dayCol})::date, b.nombre, p.id_producto, p.codigo, p.nombre, ty.nombre, d.costo_unitario, d.valor_unitario
+      ORDER BY day, b.nombre, revenue DESC, p.codigo`, params)).rows;
 
     const sales = (await pool.query(`
-      SELECT o.unique_code AS "orderCode", b.name AS branch, t.number AS "table", o.created_at AS "takenAt",
-             pa.paid_at AS "paidAt", pa.method,
-             SUM(d.quantity)::int AS units,
-             SUM(d.quantity * d.unit_price)::float AS revenue,
-             SUM(d.quantity * d.unit_cost)::float AS cost
+      SELECT o.codigo_unico AS "orderCode", b.nombre AS branch, t.numero AS "table", o.fecha_hora AS "takenAt",
+             pa.fecha_hora AS "paidAt", pa.metodo_pago AS method,
+             SUM(d.cantidad)::int AS units,
+             SUM(d.cantidad * d.valor_unitario)::float AS revenue,
+             SUM(d.cantidad * d.costo_unitario)::float AS cost
       ${SALES_FROM}
-      GROUP BY o.order_id, o.unique_code, b.name, t.number, o.created_at, pa.paid_at, pa.method
-      ORDER BY ${DATE_BY[f.dateBy].col}, o.order_id`, params)).rows;
+      GROUP BY o.id_pedido, o.codigo_unico, b.nombre, t.numero, o.fecha_hora, pa.fecha_hora, pa.metodo_pago
+      ORDER BY ${DATE_BY[f.dateBy].col}, o.id_pedido`, params)).rows;
 
     // Profit per product line and per sale
     for (const x of byProduct) { x.profit = round2(x.revenue - x.cost); x.margin = marginPct(x.profit, x.revenue); }

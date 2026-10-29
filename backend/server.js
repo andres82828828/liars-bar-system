@@ -55,7 +55,7 @@ const AUDIT_CATEGORIES = {
 
 async function log(userId, category, operation) {
   try {
-    await pool.query('INSERT INTO audit_log (user_id, category, operation) VALUES ($1, $2, $3)',
+    await pool.query('INSERT INTO log_trazabilidad (id_usuario, categoria, operacion) VALUES ($1, $2, $3)',
       [userId, AUDIT_CATEGORIES[category] ? category : 'general', operation]);
   } catch (e) {
     logger.error('Could not write to the audit log', { message: e.message, category });
@@ -178,7 +178,7 @@ app.use((err, req, res, next) => {
   try {
     const result = await migrate(pool);
     console.log('• Database: ' + result);
-    await pool.query('UPDATE app_user SET session_token = NULL');
+    await pool.query('UPDATE usuario SET token_sesion = NULL');
     app.listen(PORT, () => console.log(`✔ Liar's Bar running at http://localhost:${PORT}`));
   } catch (err) {
     logger.error('Could not start the server', { message: err.message, code: err.code });

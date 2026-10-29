@@ -1,8 +1,12 @@
 // =====================================================================
 //  Schema migration (keeps all data)
-//  1) If the database still has the old Spanish schema (sede, mesa, pedido…),
-//     it renames tables, columns, constraints and status values to English.
-//  2) Adds any column the current version needs (safe to run many times).
+//  The current schema uses the Spanish names of the entity-relationship model
+//  (sede, mesa, usuario, pedido, detalle_factura…). Older databases are brought to it:
+//  1) First Spanish version (sede without "activo", values 'libre', 'Administrador'…):
+//     translated to the English schema of the intermediate versions.
+//  2) English schema (branch, bar_table, customer_order…): missing columns are added
+//     and then tables, columns, constraints and sequences are renamed to Spanish.
+//  3) The audit trail trigger is checked (safe to run many times).
 //  Everything runs in ONE transaction: all or nothing.
 //
 //  Runs automatically when the server starts, or manually: npm run migrate
@@ -132,7 +136,7 @@ async function fromSpanish(c) {
   await c.query(`ALTER TABLE order_detail ADD CONSTRAINT ck_od_quantity CHECK (quantity > 0)`);
 }
 
-// Columns added by this version (no-op when they already exist)
+// English schema: columns added by the intermediate versions (no-op when they already exist)
 async function addNewColumns(c) {
   // Table status: 'free' renamed to 'available' ("free" means "no charge" in English; RF-25)
   // and new 'inactive' value (RF-03: a table is deactivated instead of deleted)
@@ -206,22 +210,149 @@ async function addNewColumns(c) {
                   WHERE NOT EXISTS (SELECT 1 FROM invoice_detail x WHERE x.invoice_id = i.invoice_id)`);
 }
 
+// ---------------------------------------------------------------------
+//  English schema → Spanish names of the entity-relationship model
+// ---------------------------------------------------------------------
+const TO_SPANISH_TABLES = [
+  ['branch', 'sede'], ['bar_table', 'mesa'], ['app_user', 'usuario'], ['audit_log', 'log_trazabilidad'],
+  ['supplier', 'proveedor'], ['product_type', 'tipo_producto'], ['product', 'producto'],
+  ['product_branch', 'producto_sede'], ['customer_order', 'pedido'], ['order_detail', 'detalle_pedido'],
+  ['payment', 'pago'], ['invoice', 'factura'], ['invoice_detail', 'detalle_factura']
+];
+
+// By (already renamed) Spanish table: [english column, spanish column]
+const TO_SPANISH_COLUMNS = {
+  sede:             [['branch_id', 'id_sede'], ['name', 'nombre'], ['address', 'direccion'], ['active', 'activo']],
+  mesa:             [['table_id', 'id_mesa'], ['branch_id', 'id_sede'], ['number', 'numero'], ['status', 'estado']],
+  usuario:          [['user_id', 'id_usuario'], ['branch_id', 'id_sede'], ['full_name', 'nombre_completo'], ['role', 'rol'],
+                     ['active', 'activo'], ['failed_attempts', 'intentos_fallidos'], ['session_token', 'token_sesion'],
+                     ['reset_authorized_until', 'reset_autorizado_hasta']],
+  log_trazabilidad: [['log_id', 'id_log'], ['user_id', 'id_usuario'], ['category', 'categoria'], ['operation', 'operacion'],
+                     ['created_at', 'fecha_hora']],
+  proveedor:        [['supplier_id', 'id_proveedor'], ['name', 'nombre']],
+  tipo_producto:    [['type_id', 'id_tipo'], ['name', 'nombre']],
+  producto:         [['product_id', 'id_producto'], ['type_id', 'id_tipo'], ['supplier_id', 'id_proveedor'], ['code', 'codigo'],
+                     ['name', 'nombre'], ['purchase_price', 'valor_compra'], ['sale_price', 'valor_venta']],
+  producto_sede:    [['branch_id', 'id_sede'], ['product_id', 'id_producto'], ['quantity', 'cantidad_disponible'],
+                     ['is_active', 'estado_disponibilidad']],
+  pedido:           [['order_id', 'id_pedido'], ['table_id', 'id_mesa'], ['unique_code', 'codigo_unico'],
+                     ['created_at', 'fecha_hora'], ['closed_at', 'fecha_cierre'], ['status', 'estado']],
+  detalle_pedido:   [['order_id', 'id_pedido'], ['product_id', 'id_producto'], ['quantity', 'cantidad'],
+                     ['unit_price', 'valor_unitario'], ['unit_cost', 'costo_unitario']],
+  pago:             [['payment_id', 'id_pago'], ['order_id', 'id_pedido'], ['cashier_id', 'id_cajero'], ['amount_paid', 'valor_pagado'],
+                     ['amount_received', 'valor_recibido'], ['method', 'metodo_pago'], ['paid_at', 'fecha_hora'],
+                     ['change_amount', 'cambio'], ['status', 'estado']],
+  factura:          [['invoice_id', 'id_factura'], ['order_id', 'id_pedido'], ['payment_id', 'id_pago'], ['issued_at', 'fecha_emision']],
+  detalle_factura:  [['invoice_id', 'id_factura'], ['product_id', 'id_producto'], ['quantity', 'cantidad'], ['unit_price', 'valor_unitario']]
+};
+
+// [spanish table, english constraint, spanish constraint]
+const TO_SPANISH_CONSTRAINTS = [
+  ['sede', 'branch_pkey', 'sede_pkey'], ['sede', 'branch_name_key', 'sede_nombre_key'],
+  ['mesa', 'bar_table_pkey', 'mesa_pkey'], ['mesa', 'fk_table_branch', 'fk_mesa_sede'],
+  ['mesa', 'uq_table_branch_number', 'uq_mesa_sede_numero'], ['mesa', 'ck_table_status', 'ck_mesa_estado'],
+  ['usuario', 'app_user_pkey', 'usuario_pkey'], ['usuario', 'app_user_username_key', 'usuario_username_key'],
+  ['usuario', 'fk_user_branch', 'fk_usuario_sede'], ['usuario', 'ck_user_role', 'ck_usuario_rol'],
+  ['log_trazabilidad', 'audit_log_pkey', 'log_trazabilidad_pkey'], ['log_trazabilidad', 'fk_log_user', 'fk_log_usuario'],
+  ['proveedor', 'supplier_pkey', 'proveedor_pkey'],
+  ['tipo_producto', 'product_type_pkey', 'tipo_producto_pkey'], ['tipo_producto', 'product_type_name_key', 'tipo_producto_nombre_key'],
+  ['producto', 'product_pkey', 'producto_pkey'], ['producto', 'product_code_key', 'producto_codigo_key'],
+  ['producto', 'fk_product_type', 'fk_producto_tipo'], ['producto', 'fk_product_supplier', 'fk_producto_proveedor'],
+  ['producto', 'ck_product_prices', 'ck_producto_valores'], ['producto', 'ck_product_margin', 'ck_producto_margen'],
+  ['producto_sede', 'product_branch_pkey', 'producto_sede_pkey'], ['producto_sede', 'fk_pb_branch', 'fk_ps_sede'],
+  ['producto_sede', 'fk_pb_product', 'fk_ps_producto'], ['producto_sede', 'ck_pb_quantity', 'ck_ps_cantidad'],
+  ['pedido', 'customer_order_pkey', 'pedido_pkey'], ['pedido', 'customer_order_unique_code_key', 'pedido_codigo_unico_key'],
+  ['pedido', 'fk_order_table', 'fk_pedido_mesa'], ['pedido', 'ck_order_status', 'ck_pedido_estado'],
+  ['detalle_pedido', 'order_detail_pkey', 'detalle_pedido_pkey'], ['detalle_pedido', 'fk_od_order', 'fk_dp_pedido'],
+  ['detalle_pedido', 'fk_od_product', 'fk_dp_producto'], ['detalle_pedido', 'ck_od_quantity', 'ck_dp_cantidad'],
+  ['pago', 'payment_pkey', 'pago_pkey'], ['pago', 'payment_order_id_key', 'pago_id_pedido_key'],
+  ['pago', 'fk_payment_order', 'fk_pago_pedido'], ['pago', 'fk_payment_cashier', 'fk_pago_cajero'],
+  ['pago', 'ck_payment_method', 'ck_pago_metodo'], ['pago', 'ck_payment_status', 'ck_pago_estado'],
+  ['pago', 'ck_payment_amounts', 'ck_pago_valores'],
+  ['factura', 'invoice_pkey', 'factura_pkey'], ['factura', 'invoice_order_id_key', 'factura_id_pedido_key'],
+  ['factura', 'invoice_payment_id_key', 'factura_id_pago_key'], ['factura', 'fk_invoice_order', 'fk_factura_pedido'],
+  ['factura', 'fk_invoice_payment', 'fk_factura_pago'],
+  ['detalle_factura', 'invoice_detail_pkey', 'detalle_factura_pkey'], ['detalle_factura', 'fk_id_invoice', 'fk_df_factura'],
+  ['detalle_factura', 'fk_id_product', 'fk_df_producto'], ['detalle_factura', 'ck_id_quantity', 'ck_df_cantidad']
+];
+
+// Identity columns: their sequences get the Spanish name too
+const IDENTITY_COLUMNS = [
+  ['sede', 'id_sede'], ['mesa', 'id_mesa'], ['usuario', 'id_usuario'], ['log_trazabilidad', 'id_log'],
+  ['proveedor', 'id_proveedor'], ['tipo_producto', 'id_tipo'], ['producto', 'id_producto'],
+  ['pedido', 'id_pedido'], ['pago', 'id_pago'], ['factura', 'id_factura']
+];
+
+async function toSpanish(c) {
+  // The English trigger goes away first; the Spanish one is created by auditTrailReadOnly()
+  await c.query('DROP TRIGGER IF EXISTS trg_audit_log_readonly ON audit_log');
+  await c.query('DROP TRIGGER IF EXISTS trg_audit_log_no_truncate ON audit_log');
+  await c.query('DROP FUNCTION IF EXISTS audit_log_readonly()');
+
+  for (const [en, es] of TO_SPANISH_TABLES) await c.query(`ALTER TABLE ${en} RENAME TO ${es}`);
+  for (const [table, cols] of Object.entries(TO_SPANISH_COLUMNS)) {
+    for (const [en, es] of cols) {
+      if (await columnExists(c, table, en)) await c.query(`ALTER TABLE ${table} RENAME COLUMN ${en} TO ${es}`);
+    }
+  }
+  for (const [table, en, es] of TO_SPANISH_CONSTRAINTS) {
+    if (await constraintExists(c, en)) await c.query(`ALTER TABLE ${table} RENAME CONSTRAINT ${en} TO ${es}`);
+  }
+  // PostgreSQL 18+ names the NOT NULL constraints too (table_column_not_null)
+  const notNull = await c.query(`
+    SELECT k.conname, r.relname AS tbl, a.attname AS col
+      FROM pg_constraint k
+      JOIN pg_class r ON r.oid = k.conrelid
+      JOIN pg_namespace n ON n.oid = r.relnamespace
+      JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum = k.conkey[1]
+     WHERE k.contype = 'n' AND n.nspname = current_schema()`);
+  for (const { conname, tbl, col } of notNull.rows) {
+    if (conname !== `${tbl}_${col}_not_null`) await c.query(`ALTER TABLE ${tbl} RENAME CONSTRAINT ${conname} TO ${tbl}_${col}_not_null`);
+  }
+  await c.query('ALTER INDEX IF EXISTS idx_log_user_date RENAME TO idx_log_usuario_fecha');
+  await c.query('ALTER INDEX IF EXISTS idx_log_date RENAME TO idx_log_fecha');
+  for (const [table, col] of IDENTITY_COLUMNS) {
+    const seq = (await c.query('SELECT pg_get_serial_sequence($1, $2) AS s', [table, col])).rows[0].s;
+    const wanted = `${table}_${col}_seq`;
+    if (seq && seq.split('.').pop().replace(/"/g, '') !== wanted) await c.query(`ALTER SEQUENCE ${seq} RENAME TO ${wanted}`);
+  }
+}
+
+// RNF-22: the audit trail is INSERT-only, enforced by the database
+async function auditTrailReadOnly(c) {
+  await c.query(`CREATE OR REPLACE FUNCTION log_trazabilidad_solo_insercion() RETURNS trigger AS $$
+                 BEGIN RAISE EXCEPTION 'log_trazabilidad is append-only: records cannot be modified or deleted'; END;
+                 $$ LANGUAGE plpgsql`);
+  await c.query('DROP TRIGGER IF EXISTS trg_log_trazabilidad_solo_insercion ON log_trazabilidad');
+  await c.query(`CREATE TRIGGER trg_log_trazabilidad_solo_insercion BEFORE UPDATE OR DELETE ON log_trazabilidad
+                 FOR EACH ROW EXECUTE FUNCTION log_trazabilidad_solo_insercion()`);
+  await c.query('DROP TRIGGER IF EXISTS trg_log_trazabilidad_sin_truncate ON log_trazabilidad');
+  await c.query(`CREATE TRIGGER trg_log_trazabilidad_sin_truncate BEFORE TRUNCATE ON log_trazabilidad
+                 FOR EACH STATEMENT EXECUTE FUNCTION log_trazabilidad_solo_insercion()`);
+}
+
 // Returns a short description of what was done
 async function migrate(pool) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
-    let translated = false;
-    if (await tableExists(c, 'sede') && !(await tableExists(c, 'branch'))) {
+    const steps = [];
+    // First Spanish version: it has "sede" but not "sede.activo" (added later)
+    if (await tableExists(c, 'sede') && !(await columnExists(c, 'sede', 'activo')) && !(await tableExists(c, 'branch'))) {
       await fromSpanish(c);
-      translated = true;
+      steps.push('first version upgraded');
     }
-    if (!(await tableExists(c, 'branch'))) {
+    if (await tableExists(c, 'branch')) {
+      await addNewColumns(c);
+      await toSpanish(c);
+      steps.push('tables and columns renamed to Spanish');
+    }
+    if (!(await tableExists(c, 'sede'))) {
       throw new Error('The database has no tables. Run: npm run init-db');
     }
-    await addNewColumns(c);
+    await auditTrailReadOnly(c);
     await c.query('COMMIT');
-    return translated ? 'Spanish schema translated to English (data preserved)' : 'Schema up to date';
+    return steps.length ? `Schema migrated: ${steps.join(', ')} (data preserved)` : 'Schema up to date';
   } catch (e) {
     await c.query('ROLLBACK');
     throw e;

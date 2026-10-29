@@ -26,19 +26,19 @@ module.exports = ({ app, pool, auth, adminOnly, wrap, HttpError, AUDIT_CATEGORIE
 
     const params = [from, to, userId, category, text ? `%${text}%` : null];
     const where = `
-       WHERE ($1::date IS NULL OR l.created_at >= $1::date)
-         AND ($2::date IS NULL OR l.created_at < $2::date + 1)
-         AND ($3::int  IS NULL OR l.user_id = $3)
-         AND ($4::text IS NULL OR l.category = $4)
-         AND ($5::text IS NULL OR l.operation ILIKE $5)`;
+       WHERE ($1::date IS NULL OR l.fecha_hora >= $1::date)
+         AND ($2::date IS NULL OR l.fecha_hora < $2::date + 1)
+         AND ($3::int  IS NULL OR l.id_usuario = $3)
+         AND ($4::text IS NULL OR l.categoria = $4)
+         AND ($5::text IS NULL OR l.operacion ILIKE $5)`;
 
-    const count = await pool.query(`SELECT COUNT(*)::int AS n FROM audit_log l ${where}`, params);
+    const count = await pool.query(`SELECT COUNT(*)::int AS n FROM log_trazabilidad l ${where}`, params);
     const { rows } = await pool.query(`
-      SELECT l.log_id AS id, l.created_at AS "createdAt", l.category, l.operation,
-             u.user_id AS "userId", u.username, u.full_name AS name, u.role
-        FROM audit_log l JOIN app_user u ON u.user_id = l.user_id
+      SELECT l.id_log AS id, l.fecha_hora AS "createdAt", l.categoria AS category, l.operacion AS operation,
+             u.id_usuario AS "userId", u.username, u.nombre_completo AS name, u.rol AS role
+        FROM log_trazabilidad l JOIN usuario u ON u.id_usuario = l.id_usuario
       ${where}
-       ORDER BY l.created_at DESC, l.log_id DESC
+       ORDER BY l.fecha_hora DESC, l.id_log DESC
        LIMIT ${MAX_ROWS}`, params);
 
     res.json({ total: count.rows[0].n, shown: rows.length, limit: MAX_ROWS, rows });

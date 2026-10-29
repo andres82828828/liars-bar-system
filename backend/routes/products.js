@@ -17,22 +17,22 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError }) => {
       return name;
     };
     const ensureFree = async (name, exceptId = 0) => {
-      const dup = await pool.query(`SELECT 1 FROM ${table} WHERE LOWER(name) = LOWER($1) AND ${idCol} <> $2`, [name, exceptId]);
+      const dup = await pool.query(`SELECT 1 FROM ${table} WHERE LOWER(nombre) = LOWER($1) AND ${idCol} <> $2`, [name, exceptId]);
       if (dup.rowCount) throw new HttpError(409, `The ${label} "${name}" already exists.`);
     };
 
     app.get(`/api/${route}`, auth, wrap(async (req, res) => {
       const { rows } = await pool.query(`
-        SELECT x.${idCol} AS id, x.name, COUNT(p.product_id)::int AS products
-          FROM ${table} x LEFT JOIN product p ON p.${idCol} = x.${idCol}
-         GROUP BY x.${idCol} ORDER BY x.name`);
+        SELECT x.${idCol} AS id, x.nombre AS name, COUNT(p.id_producto)::int AS products
+          FROM ${table} x LEFT JOIN producto p ON p.${idCol} = x.${idCol}
+         GROUP BY x.${idCol} ORDER BY x.nombre`);
       res.json(rows);
     }));
 
     app.post(`/api/${route}`, auth, adminOnly, wrap(async (req, res) => {
       const name = readName(req.body);
       await ensureFree(name);
-      const r = await pool.query(`INSERT INTO ${table} (name) VALUES ($1) RETURNING ${idCol}`, [name]);
+      const r = await pool.query(`INSERT INTO ${table} (nombre) VALUES ($1) RETURNING ${idCol}`, [name]);
       await log(req.user.id, 'catalog', `Created ${label} "${name}"`);
       res.status(201).json({ id: r.rows[0][idCol] });
     }));
@@ -41,7 +41,7 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError }) => {
       const id = Number(req.params.id);
       const name = readName(req.body);
       await ensureFree(name, id);
-      const r = await pool.query(`UPDATE ${table} SET name = $1 WHERE ${idCol} = $2`, [name, id]);
+      const r = await pool.query(`UPDATE ${table} SET nombre = $1 WHERE ${idCol} = $2`, [name, id]);
       if (!r.rowCount) throw new HttpError(404, `The ${label} was not found.`);
       await log(req.user.id, 'catalog', `Renamed ${label} ${id} to "${name}"`);
       res.json({ ok: true });
@@ -50,15 +50,15 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError }) => {
     app.delete(`/api/${route}/:id`, auth, adminOnly, wrap(async (req, res) => {
       const id = Number(req.params.id);
       try {
-        const r = await pool.query(`DELETE FROM ${table} WHERE ${idCol} = $1 RETURNING name`, [id]);
+        const r = await pool.query(`DELETE FROM ${table} WHERE ${idCol} = $1 RETURNING nombre AS name`, [id]);
         if (!r.rowCount) throw new HttpError(404, `The ${label} was not found.`);
         await log(req.user.id, 'catalog', `Deleted ${label} "${r.rows[0].name}"`);
         res.json({ ok: true });
       } catch (e) {
         if (IN_USE.includes(e.code)) {
           // Explain WHY it cannot be deleted and what to do instead
-          const x = (await pool.query(`SELECT x.name, COUNT(p.product_id)::int AS n FROM ${table} x
-            LEFT JOIN product p ON p.${idCol} = x.${idCol} WHERE x.${idCol} = $1 GROUP BY x.name`, [id])).rows[0] || { name: '', n: 0 };
+          const x = (await pool.query(`SELECT x.nombre AS name, COUNT(p.id_producto)::int AS n FROM ${table} x
+            LEFT JOIN producto p ON p.${idCol} = x.${idCol} WHERE x.${idCol} = $1 GROUP BY x.nombre`, [id])).rows[0] || { name: '', n: 0 };
           throw new HttpError(409, `The ${label} "${x.name}" cannot be deleted because ${x.n} product(s) still use it. ` +
             `First assign another ${label} to those products (Products → Edit) or delete them, then try again.`);
         }
@@ -67,23 +67,23 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError }) => {
     }));
   }
 
-  nameCatalog({ route: 'product-types', table: 'product_type', idCol: 'type_id', label: 'product type', maxLen: 50 });
-  nameCatalog({ route: 'suppliers', table: 'supplier', idCol: 'supplier_id', label: 'supplier', maxLen: 100 });
+  nameCatalog({ route: 'product-types', table: 'tipo_producto', idCol: 'id_tipo', label: 'product type', maxLen: 50 });
+  nameCatalog({ route: 'suppliers', table: 'proveedor', idCol: 'id_proveedor', label: 'supplier', maxLen: 100 });
 
   // ----------------------------- PRODUCTS -----------------------------
   app.get('/api/products', auth, wrap(async (req, res) => {
     const { rows } = await pool.query(`
-      SELECT p.product_id AS id, p.code, p.name, p.type_id AS "typeId", t.name AS type,
-             p.supplier_id AS "supplierId", s.name AS supplier,
-             p.purchase_price::float AS "purchasePrice", p.sale_price::float AS "salePrice",
+      SELECT p.id_producto AS id, p.codigo AS code, p.nombre AS name, p.id_tipo AS "typeId", t.nombre AS type,
+             p.id_proveedor AS "supplierId", s.nombre AS supplier,
+             p.valor_compra::float AS "purchasePrice", p.valor_venta::float AS "salePrice",
              -- branches where the product is currently ACTIVE (HU-020)
-             COALESCE((SELECT string_agg(b.name, ', ' ORDER BY b.name)
-                         FROM product_branch pb JOIN branch b ON b.branch_id = pb.branch_id
-                        WHERE pb.product_id = p.product_id AND pb.is_active), '') AS branches
-        FROM product p
-        JOIN product_type t ON t.type_id = p.type_id
-        JOIN supplier s ON s.supplier_id = p.supplier_id
-       ORDER BY p.name`);
+             COALESCE((SELECT string_agg(b.nombre, ', ' ORDER BY b.nombre)
+                         FROM producto_sede pb JOIN sede b ON b.id_sede = pb.id_sede
+                        WHERE pb.id_producto = p.id_producto AND pb.estado_disponibilidad), '') AS branches
+        FROM producto p
+        JOIN tipo_producto t ON t.id_tipo = p.id_tipo
+        JOIN proveedor s ON s.id_proveedor = p.id_proveedor
+       ORDER BY p.nombre`);
     res.json(rows);
   }));
 
@@ -125,8 +125,8 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError }) => {
     const p = validateProduct(req.body);
     try {
       const r = await pool.query(
-        `INSERT INTO product (type_id, supplier_id, code, name, purchase_price, sale_price)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING product_id`,
+        `INSERT INTO producto (id_tipo, id_proveedor, codigo, nombre, valor_compra, valor_venta)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id_producto AS product_id`,
         [p.typeId, p.supplierId, p.code, p.name, p.purchasePrice, p.salePrice]);
       await log(req.user.id, 'catalog', `Created product ${p.code} - ${p.name}`);
       res.status(201).json({ id: r.rows[0].product_id });
@@ -138,8 +138,8 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError }) => {
     const p = validateProduct(req.body);
     try {
       const r = await pool.query(
-        `UPDATE product SET type_id = $1, supplier_id = $2, code = $3, name = $4, purchase_price = $5, sale_price = $6
-          WHERE product_id = $7`,
+        `UPDATE producto SET id_tipo = $1, id_proveedor = $2, codigo = $3, nombre = $4, valor_compra = $5, valor_venta = $6
+          WHERE id_producto = $7`,
         [p.typeId, p.supplierId, p.code, p.name, p.purchasePrice, p.salePrice, id]);
       if (!r.rowCount) throw new HttpError(404, 'Product not found.');
       await log(req.user.id, 'catalog', `Edited product ${p.code} - ${p.name}`);
@@ -150,15 +150,15 @@ module.exports = ({ app, pool, auth, adminOnly, log, wrap, HttpError }) => {
   app.delete('/api/products/:id', auth, adminOnly, wrap(async (req, res) => {
     const id = Number(req.params.id);
     try {
-      const r = await pool.query('DELETE FROM product WHERE product_id = $1 RETURNING code, name', [id]);
+      const r = await pool.query('DELETE FROM producto WHERE id_producto = $1 RETURNING codigo AS code, nombre AS name', [id]);
       if (!r.rowCount) throw new HttpError(404, 'Product not found.');
       await log(req.user.id, 'catalog', `Deleted product ${r.rows[0].code} - ${r.rows[0].name}`);
       res.json({ ok: true });
     } catch (e) {
       if (IN_USE.includes(e.code)) {
         // Past orders keep a reference to the product: deleting it would alter old invoices and reports
-        const x = (await pool.query(`SELECT p.name, COUNT(DISTINCT d.order_id)::int AS n FROM product p
-          LEFT JOIN order_detail d ON d.product_id = p.product_id WHERE p.product_id = $1 GROUP BY p.name`, [id])).rows[0] || { name: '', n: 0 };
+        const x = (await pool.query(`SELECT p.nombre AS name, COUNT(DISTINCT d.id_pedido)::int AS n FROM producto p
+          LEFT JOIN detalle_pedido d ON d.id_producto = p.id_producto WHERE p.id_producto = $1 GROUP BY p.nombre`, [id])).rows[0] || { name: '', n: 0 };
         throw new HttpError(409, `"${x.name}" cannot be deleted because it appears in ${x.n} order(s). ` +
           'Deleting it would change past invoices and sales reports. ' +
           'If you no longer want to sell it, deactivate it in each branch from Inventory.');
